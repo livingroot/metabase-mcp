@@ -467,6 +467,79 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
+  // Tool: cards_execute (QUERY-03)
+  // -------------------------------------------------------------------------
+  // Runs a saved Metabase question (card) by ID and returns results in the
+  // same Markdown format as queries_execute_sql (D-14 from 03-CONTEXT.md).
+  //
+  // T-03-05: card_id validated with z.number().int().positive() — prevents
+  //          string/float/negative values from being interpolated into URL path.
+  // T-03-06: missing response.data.cols guard — MBQL cards may return a
+  //          different envelope; return a typed isError message instead of throwing.
+  // T-03-02: error messages never include METABASE_API_KEY or request URL.
+  // D-12: per-handler MetabaseClient instantiation.
+  // D-14: NO card-metadata header — output is identical in shape to queries_execute_sql.
+
+  server.tool(
+    "cards_execute",
+    "Run a saved Metabase question (card) by ID and return results as a Markdown table. Defaults to 50 rows; pass max_rows to adjust. Only native SQL cards are fully supported.",
+    {
+      card_id: z.number().int().positive().describe("Metabase saved question (card) ID"),
+      max_rows: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(50)
+        .describe("Maximum rows to return (default 50)"),
+      parameters: z
+        .array(
+          z.object({
+            name: z
+              .string()
+              .describe("Template tag name matching {{name}} in the saved question SQL"),
+            value: z.string().describe("Value to bind to this tag"),
+            type: z
+              .string()
+              .optional()
+              .describe(
+                "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
+              ),
+          }),
+        )
+        .optional()
+        .describe("Filter parameters for {{template_tag}} placeholders in the saved question"),
+    },
+    async ({ card_id, max_rows, parameters }) => {
+      try {
+        const client = new MetabaseClient({});
+        const response = await client.executeCard(card_id, parameters);
+        // T-03-06: Guard for MBQL / unsupported card types where data.cols may be absent
+        if (response.data?.cols === undefined) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "cards_execute error: Unsupported card type — only native SQL cards are fully supported.",
+              },
+            ],
+          };
+        }
+        const text = formatQueryResult(response, max_rows);
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-03-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `cards_execute error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 
