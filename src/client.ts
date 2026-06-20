@@ -116,20 +116,22 @@ export class MetabaseClient {
       let errorMessage: string;
       let rawBody: unknown;
       try {
-        rawBody = await response.json();
-        const body = rawBody as { message?: string };
-        errorMessage = body.message ?? `Metabase API error ${response.status}: ${response.statusText}`;
-      } catch {
+        // Read body once as text — calling .json() then .text() on the same
+        // undici ReadableStream throws "body used already" in Node.js 18+.
+        const text = await response.text();
         try {
-          const text = await response.text();
+          rawBody = JSON.parse(text);
+          const body = rawBody as { message?: string };
+          errorMessage = body.message ?? `Metabase API error ${response.status}: ${response.statusText}`;
+        } catch {
           rawBody = text;
           errorMessage = text.length > 0
             ? `Metabase API error ${response.status}: ${text}`
             : `Metabase API error ${response.status}: ${response.statusText}`;
-        } catch {
-          rawBody = undefined;
-          errorMessage = `Metabase API error ${response.status}: ${response.statusText}`;
         }
+      } catch {
+        rawBody = undefined;
+        errorMessage = `Metabase API error ${response.status}: ${response.statusText}`;
       }
 
       throw new MetabaseApiError(errorMessage, response.status, rawBody);
