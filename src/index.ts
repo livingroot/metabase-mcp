@@ -15,7 +15,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { MetabaseClient, MetabaseApiError } from "./client.js";
-import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues } from "./types.js";
+import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -62,6 +62,63 @@ function formatDatabaseSchema(db: MetabaseDatabaseMetadata): string {
       );
     }
     lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Formats a MetabaseDatasetResponse as a Markdown table with truncation signals.
+ *
+ * Truncation detection order (Pitfall 3 — check UNSLICED array first):
+ *   1. metabaseCap: allRows.length === 2000 — Metabase's undocumented hard limit.
+ *      Emits D-01 Metabase cap warning BEFORE the table.
+ *   2. agentCap: allRows.length > maxRows (only when metabaseCap is false).
+ *      Emits D-01 agent cap warning BEFORE the table; table shows first maxRows rows.
+ *   3. No truncation: appends *(N rows)* footer AFTER the table.
+ *
+ * D-04: Zero-row input renders header + separator + empty body + *(0 rows)* footer.
+ * T-03-03: escapeMd() applied to every column header and cell value.
+ */
+function formatQueryResult(response: MetabaseDatasetResponse, maxRows: number): string {
+  const cols = response.data?.cols ?? [];
+  const allRows = response.data?.rows ?? [];
+
+  // Detect Metabase cap on the UNSLICED array (Pitfall 3)
+  const metabaseCap = allRows.length === 2000;
+  const agentCap = !metabaseCap && allRows.length > maxRows;
+  const displayRows = agentCap ? allRows.slice(0, maxRows) : allRows;
+
+  const lines: string[] = [];
+
+  // Truncation notice BEFORE the table (D-02)
+  if (metabaseCap) {
+    lines.push(
+      `⚠ Metabase returned exactly 2,000 rows — its silent limit.\nAdd a SQL LIMIT clause to refine the result set.`,
+    );
+    lines.push(""); // blank line before table
+  } else if (agentCap) {
+    lines.push(
+      `⚠ Results capped at ${maxRows} rows (your max_rows limit).\nPass max_rows=${allRows.length + 1} to see more.`,
+    );
+    lines.push(""); // blank line before table
+  }
+
+  // Header row and separator
+  lines.push(`| ${cols.map((c) => escapeMd(c.display_name)).join(" | ")} |`);
+  lines.push(`| ${cols.map(() => "---").join(" | ")} |`);
+
+  // Data rows (D-04: zero rows — loop adds nothing, header/sep still rendered)
+  for (const row of displayRows) {
+    lines.push(
+      `| ${(row as unknown[]).map((v) => escapeMd(v == null ? "" : String(v))).join(" | ")} |`,
+    );
+  }
+
+  // Row count footer when no truncation (D-03)
+  if (!metabaseCap && !agentCap) {
+    lines.push("");
+    lines.push(`*(${displayRows.length} rows)*`);
   }
 
   return lines.join("\n");
@@ -341,6 +398,70 @@ export function createServer(): McpServer {
         return {
           isError: true,
           content: [{ type: "text", text: `fields_get error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: queries_execute_sql (QUERY-01, QUERY-02, QUERY-05)
+  // -------------------------------------------------------------------------
+  // Executes raw SQL against a Metabase database and returns results as a
+  // Markdown table with truncation-aware messaging.
+  //
+  // Truncation signals (D-01 from 03-CONTEXT.md):
+  //   - Agent cap (max_rows hit): ⚠ Results capped at N rows... (before table)
+  //   - Metabase cap (exactly 2000 rows): ⚠ Metabase returned exactly 2,000 rows... (before table)
+  //   - No truncation: *(N rows)* footer after table
+  //
+  // T-03-01: database_id validated with z.number().int().positive()
+  // T-03-02: error messages never include METABASE_API_KEY or request URL
+  // T-03-03: escapeMd() applied to all column headers and cell values (in formatQueryResult)
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "queries_execute_sql",
+    "Execute raw SQL against a database and return results as a Markdown table. Defaults to 50 rows; pass max_rows to adjust. Use queries_export for result sets exceeding 2,000 rows.",
+    {
+      database_id: z.number().int().positive().describe("Metabase database ID"),
+      sql: z.string().describe("SQL query to execute"),
+      max_rows: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(50)
+        .describe("Maximum rows to return (default 50)"),
+      parameters: z
+        .array(
+          z.object({
+            name: z
+              .string()
+              .describe("Template tag name matching {{name}} in SQL"),
+            value: z.string().describe("Value to bind to this tag"),
+            type: z
+              .string()
+              .optional()
+              .describe(
+                "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
+              ),
+          }),
+        )
+        .optional()
+        .describe("Filter parameters for {{template_tag}} placeholders in SQL"),
+    },
+    async ({ database_id, sql, max_rows, parameters }) => {
+      try {
+        const client = new MetabaseClient({});
+        const response = await client.executeSQL(database_id, sql, parameters);
+        const text = formatQueryResult(response, max_rows);
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-03-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `queries_execute_sql error: ${msg}` }],
         };
       }
     },

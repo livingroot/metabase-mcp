@@ -216,10 +216,13 @@ describe("MCP query tools — queries_execute_sql, cards_execute, queries_export
       });
 
       const text = (res.content[0] as { type: string; text: string }).text;
-      // Rows 1 and 2 (a, b) present; row 5 (e) absent
-      expect(text).toContain("a");
-      expect(text).toContain("b");
-      expect(text).not.toContain("e");
+      // Rows 1 and 2 (a, b) present; rows 3-5 (c, d, e) absent as data rows
+      // Count data rows by counting table row separators (each data row has "| N |" pattern)
+      expect(text).toContain("| 1 |");
+      expect(text).toContain("| 2 |");
+      expect(text).not.toContain("| 3 |");
+      expect(text).not.toContain("| 4 |");
+      expect(text).not.toContain("| 5 |");
     });
 
     it("Metabase cap: 2000-row result renders D-01 Metabase cap warning before the table", async () => {
