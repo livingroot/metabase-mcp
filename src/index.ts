@@ -13,7 +13,54 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 import { MetabaseClient, MetabaseApiError } from "./client.js";
+import type { MetabaseDatabase, MetabaseDatabaseMetadata } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Formats a MetabaseDatabaseMetadata object as a hierarchical Markdown string.
+ *
+ * Output structure:
+ *   ## Database: {name} (id={id}, engine={engine})
+ *
+ *   ### Table: {name} (id={id}, schema={schema}, ~N rows)
+ *   | Column | Display Name | Type | Semantic Type | Required |
+ *   |--------|-------------|------|---------------|---------|
+ *   | col    | Col          | type/X | type/PK     | yes     |
+ *
+ * null estimated_row_count is rendered as "row count unknown" (Pitfall 2).
+ * Simple template-literal joins — no padding library (Don't Hand-Roll).
+ */
+function formatDatabaseSchema(db: MetabaseDatabaseMetadata): string {
+  const lines: string[] = [
+    `## Database: ${db.name} (id=${db.id}, engine=${db.engine})`,
+    "",
+  ];
+
+  for (const table of db.tables) {
+    const rowCount =
+      table.estimated_row_count != null
+        ? `~${table.estimated_row_count.toLocaleString()} rows`
+        : "row count unknown";
+    lines.push(
+      `### Table: ${table.name} (id=${table.id}, schema=${table.schema ?? "default"}, ${rowCount})`,
+    );
+    lines.push("| Column | Display Name | Type | Semantic Type | Required |");
+    lines.push("|--------|-------------|------|---------------|---------|");
+    for (const field of table.fields) {
+      lines.push(
+        `| ${field.name} | ${field.display_name} | ${field.base_type} | ${field.semantic_type ?? "—"} | ${field.database_required ? "yes" : "no"} |`,
+      );
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
 
 // ---------------------------------------------------------------------------
 // Server factory
@@ -57,6 +104,74 @@ export function createServer(): McpServer {
         return {
           isError: true,
           content: [{ type: "text", text: `server_ping error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: databases_list (SCHEMA-01)
+  // -------------------------------------------------------------------------
+  // Lists all databases connected to this Metabase instance.
+  // Handles both plain-array and { data: [] } envelope response shapes (Pitfall 1).
+  // Per-handler MetabaseClient instantiation (Pitfall 4): env vars read at call time.
+
+  server.tool(
+    "databases_list",
+    "List all databases connected to this Metabase instance. Returns ID, name, engine type, and sync status as a Markdown table.",
+    {}, // no parameters
+    async () => {
+      try {
+        const client = new MetabaseClient({});
+        const result = await client.listDatabases();
+        // Normalise both response shapes: bare array or { data: MetabaseDatabase[] } envelope
+        const dbs: MetabaseDatabase[] = Array.isArray(result)
+          ? (result as MetabaseDatabase[])
+          : ((result as { data: MetabaseDatabase[] }).data ?? []);
+
+        const header = "| ID | Name | Engine | Full Sync |\n|----|------|--------|-----------|";
+        const rows = dbs
+          .map(
+            (db) =>
+              `| ${db.id} | ${db.name} | ${db.engine} | ${db.is_full_sync ? "yes" : "no"} |`,
+          )
+          .join("\n");
+        const text = rows.length > 0 ? `${header}\n${rows}` : `${header}`;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `databases_list error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: databases_get_schema (SCHEMA-02)
+  // -------------------------------------------------------------------------
+  // Returns the full DB → tables → fields schema tree for a database.
+  // Validates database_id with z.number() (T-02-01: path injection prevention).
+  // Renders null estimated_row_count as "row count unknown" (Pitfall 2).
+  // Per-handler MetabaseClient instantiation (Pitfall 4).
+
+  server.tool(
+    "databases_get_schema",
+    "Retrieve the full schema tree for a database: all tables with columns, data types, and display labels. A single call returns the complete DB → tables → fields metadata.",
+    { database_id: z.number().describe("Metabase database ID") },
+    async ({ database_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        const db = await client.getDatabaseMetadata(database_id);
+        const text = formatDatabaseSchema(db);
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-02-02: never echo METABASE_API_KEY or full request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `databases_get_schema error: ${msg}` }],
         };
       }
     },

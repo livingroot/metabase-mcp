@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -151,5 +151,28 @@ export class MetabaseClient {
    */
   async getUser(): Promise<MetabaseUser> {
     return this.request<MetabaseUser>("/api/user/current");
+  }
+
+  /**
+   * Returns the list of databases connected to this Metabase instance.
+   * Calls GET /api/database.
+   *
+   * Returns the raw response (either a plain array or a { data, total } envelope).
+   * The tool handler in src/index.ts normalises the shape with an Array.isArray guard
+   * (Pitfall 1 from 02-RESEARCH.md).
+   */
+  async listDatabases(): Promise<MetabaseDatabaseListResponse | unknown[]> {
+    return this.request<MetabaseDatabaseListResponse | unknown[]>("/api/database");
+  }
+
+  /**
+   * Returns the full schema tree for a database: all tables with their fields.
+   * Calls GET /api/database/:id/metadata.
+   *
+   * A single call returns the complete DB → tables → fields tree (SCHEMA-02).
+   * Throws MetabaseApiError on non-2xx responses (e.g. 404 for unknown database_id).
+   */
+  async getDatabaseMetadata(databaseId: number): Promise<MetabaseDatabaseMetadata> {
+    return this.request<MetabaseDatabaseMetadata>(`/api/database/${databaseId}/metadata`);
   }
 }
