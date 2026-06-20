@@ -463,22 +463,7 @@ describe("MCP card tools", () => {
     });
 
     it("returns a confirmation message containing 'deleted'", async () => {
-      vi.fn().mockResolvedValueOnce({
-        ok: true,
-        status: 204,
-        statusText: "No Content",
-        json: () => Promise.resolve(null),
-        text: () => Promise.resolve(""),
-      } as unknown as Response);
-
-      // Use makeSequentialFetchMock for cleaner 204 handling
-      const mockFetch = vi.fn().mockResolvedValueOnce({
-        ok: true,
-        status: 204,
-        statusText: "No Content",
-        json: () => Promise.resolve(null),
-        text: () => Promise.resolve(""),
-      } as unknown as Response);
+      const mockFetch = makeSequentialFetchMock([[204, null]]);
       vi.stubGlobal("fetch", mockFetch);
 
       const res = await client.callTool({
