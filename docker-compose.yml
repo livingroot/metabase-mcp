@@ -1,0 +1,20 @@
+services:
+  metabase:
+    image: metabase/metabase:v0.59.14
+    container_name: metabase-mcp-dev
+    ports:
+      - "3000:3000"
+    environment:
+      # Use the embedded H2 database to keep the skeleton thin.
+      # MB_DB_* env vars for external Postgres are out of scope for this skeleton.
+      # Set METABASE_API_KEY and METABASE_URL in .env (see .env.example).
+      MB_ANON_TRACKING_ENABLED: "false"
+    healthcheck:
+      # Metabase exposes /api/health returning {"status":"ok"} once fully initialized.
+      # First boot takes 2+ minutes on slow hardware; start_period prevents false-negative
+      # health-check failures during cold start (see PITFALLS.md — INFRA-06 note).
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
