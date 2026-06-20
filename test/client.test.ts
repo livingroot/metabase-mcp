@@ -140,15 +140,6 @@ describe("MetabaseClient", () => {
     const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
 
     await expect(client.getUser()).rejects.toThrow(MetabaseApiError);
-
-    try {
-      await client.getUser();
-    } catch (err) {
-      // Re-stub because the first getUser() consumed the mock
-      // (this block is unreachable — test is already done by rejects.toThrow)
-      // Keeping the catch-shape test below instead.
-      expect(err).toBeDefined();
-    }
   });
 
   it("MetabaseApiError carries .status === 401 and a non-empty .message", async () => {
