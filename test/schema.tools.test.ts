@@ -21,6 +21,41 @@ import { createServer } from "../src/index.js";
 // Seed data for mocked Metabase responses (shared by databases_* and tables_* tests)
 // ---------------------------------------------------------------------------
 
+// Seed data for GET /api/field/:id (fields_get — list field)
+const SEED_FIELD_LIST = {
+  id: 102,
+  name: "status",
+  display_name: "Status",
+  base_type: "type/Text",
+  semantic_type: "type/Category",
+  visibility_type: "normal",
+  database_required: true,
+  fk_target_field_id: null,
+  has_field_values: "list",
+  description: null,
+};
+
+// Seed data for GET /api/field/:id (fields_get — search field, no values fetch)
+const SEED_FIELD_SEARCH = {
+  id: 103,
+  name: "user_id",
+  display_name: "User ID",
+  base_type: "type/Integer",
+  semantic_type: "type/FK",
+  visibility_type: "normal",
+  database_required: false,
+  fk_target_field_id: 1,
+  has_field_values: "search",
+  description: null,
+};
+
+// Seed data for GET /api/field/:id/values (only for list fields)
+const SEED_FIELD_VALUES = {
+  field_id: 102,
+  values: [["pending"], ["shipped"], ["return_requested"], ["returned"]],
+  human_readable_values: [],
+};
+
 const SEED_DB_ARRAY = [
   { id: 1, name: "Sample Database", engine: "h2", is_full_sync: true, is_sample: true },
   { id: 2, name: "Production", engine: "postgres", is_full_sync: true, is_sample: false },
@@ -146,6 +181,25 @@ function makeFetchMock(status: number, body: unknown): typeof fetch {
     json: () => Promise.resolve(body),
     text: () => Promise.resolve(JSON.stringify(body)),
   } as unknown as Response);
+}
+
+/**
+ * Creates a fetch mock that returns different responses for sequential calls.
+ * Used for fields_get which makes two calls: metadata then values.
+ * Each entry is [status, body] for one sequential call.
+ */
+function makeSequentialFetchMock(calls: Array<[number, unknown]>): typeof fetch {
+  const mockFn = vi.fn();
+  for (const [status, body] of calls) {
+    mockFn.mockResolvedValueOnce({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 200 ? "OK" : status === 404 ? "Not Found" : "Error",
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    } as unknown as Response);
+  }
+  return mockFn as unknown as typeof fetch;
 }
 
 // ---------------------------------------------------------------------------
@@ -489,5 +543,170 @@ describe("MCP schema tools — tables_list and tables_get", () => {
       expect(text).toContain("tables_get");
       expect(text).not.toContain("test-key-table-tools");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCP field tool: fields_get
+// RED state: Tests FAIL until plan 02-03 Task 2 implements the client methods
+// and registers the tool in src/index.ts.
+// ---------------------------------------------------------------------------
+
+describe("MCP schema tools — fields_get", () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    process.env["METABASE_URL"] = "http://metabase.test";
+    process.env["METABASE_API_KEY"] = "test-key-fields-tools";
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer();
+
+    await Promise.all([
+      server.connect(serverTransport),
+      (async () => {
+        client = new Client({ name: "field-tools-test-client", version: "0.0.1" });
+        await client.connect(clientTransport);
+      })(),
+    ]);
+  });
+
+  afterAll(async () => {
+    await client?.close?.();
+    delete process.env["METABASE_URL"];
+    delete process.env["METABASE_API_KEY"];
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // -------------------------------------------------------------------------
+  // Tool registration
+  // -------------------------------------------------------------------------
+
+  it("registers fields_get tool", async () => {
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("fields_get");
+  });
+
+  // -------------------------------------------------------------------------
+  // fields_get — list branch: metadata + values (two fetch calls)
+  // -------------------------------------------------------------------------
+
+  describe("fields_get — list branch (has_field_values = 'list')", () => {
+    it("fetches metadata and values (two sequential fetch calls) and returns both", async () => {
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_FIELD_LIST],
+        [200, SEED_FIELD_VALUES],
+      ]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({ name: "fields_get", arguments: { field_id: 102 } });
+
+      expect(res.isError).toBeFalsy();
+      // stubbed fetch must have been called exactly twice
+      expect((mockFetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+    });
+
+    it("output contains metadata: display name, data type, and semantic type", async () => {
+      vi.stubGlobal(
+        "fetch",
+        makeSequentialFetchMock([
+          [200, SEED_FIELD_LIST],
+          [200, SEED_FIELD_VALUES],
+        ]),
+      );
+
+      const res = await client.callTool({ name: "fields_get", arguments: { field_id: 102 } });
+
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("Status");           // display_name
+      expect(text).toContain("type/Text");         // base_type (data type)
+      expect(text).toContain("type/Category");     // semantic_type
+    });
+
+    it("output contains a Valid Values section listing the seeded enum values", async () => {
+      vi.stubGlobal(
+        "fetch",
+        makeSequentialFetchMock([
+          [200, SEED_FIELD_LIST],
+          [200, SEED_FIELD_VALUES],
+        ]),
+      );
+
+      const res = await client.callTool({ name: "fields_get", arguments: { field_id: 102 } });
+
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("pending");
+      expect(text).toContain("shipped");
+      expect(text).toContain("return_requested");
+      expect(text).toContain("returned");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // fields_get — search branch (has_field_values = 'search'): single fetch call, not-applicable marker
+  // -------------------------------------------------------------------------
+
+  describe("fields_get — non-list branch (has_field_values = 'search')", () => {
+    it("makes exactly one fetch call (no /values call) for a search-type field", async () => {
+      const mockFetch = makeFetchMock(200, SEED_FIELD_SEARCH);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({ name: "fields_get", arguments: { field_id: 103 } });
+
+      expect(res.isError).toBeFalsy();
+      // Only metadata call — no /values fetch
+      expect((mockFetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    });
+
+    it("output contains a not-applicable values marker for a search-type field", async () => {
+      vi.stubGlobal("fetch", makeFetchMock(200, SEED_FIELD_SEARCH));
+
+      const res = await client.callTool({ name: "fields_get", arguments: { field_id: 103 } });
+
+      const text = (res.content[0] as { type: string; text: string }).text;
+      // Should signal not applicable — not list values
+      expect(text).toMatch(/N\/A|not applicable|high.?cardinality|search/i);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // fields_get — error: getField returns 404
+  // -------------------------------------------------------------------------
+
+  it("returns isError: true on a 404 from getField with tool name in message", async () => {
+    vi.stubGlobal("fetch", makeFetchMock(404, { message: "Not found." }));
+
+    const res = await client.callTool({ name: "fields_get", arguments: { field_id: 9999 } });
+
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { type: string; text: string }).text;
+    expect(text).toContain("fields_get");
+    expect(text).not.toContain("test-key-fields-tools");
+  });
+
+  // -------------------------------------------------------------------------
+  // fields_get — graceful degradation: getFieldValues rejects, metadata still returned
+  // -------------------------------------------------------------------------
+
+  it("still returns metadata when getFieldValues call rejects (graceful degradation)", async () => {
+    // First call (getField) succeeds, second call (getFieldValues) fails with 500
+    const mockFetch = makeSequentialFetchMock([
+      [200, SEED_FIELD_LIST],
+      [500, { message: "Internal Server Error" }],
+    ]);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const res = await client.callTool({ name: "fields_get", arguments: { field_id: 102 } });
+
+    // Must NOT be isError — metadata is returned even when values call fails
+    expect(res.isError).toBeFalsy();
+    const text = (res.content[0] as { type: string; text: string }).text;
+    // Metadata must still be present
+    expect(text).toContain("Status");
+    expect(text).toContain("type/Text");
   });
 });

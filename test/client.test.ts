@@ -347,6 +347,114 @@ describe("MetabaseClient", () => {
   });
 
   // -------------------------------------------------------------------------
+  // getField()
+  // -------------------------------------------------------------------------
+
+  describe("getField()", () => {
+    it("returns an object exposing base_type, semantic_type, and has_field_values", async () => {
+      const mockField = {
+        id: 101,
+        name: "status",
+        display_name: "Status",
+        base_type: "type/Text",
+        semantic_type: "type/Category",
+        visibility_type: "normal",
+        database_required: true,
+        fk_target_field_id: null,
+        has_field_values: "list",
+        description: null,
+      };
+      vi.stubGlobal("fetch", makeFetchMock(200, mockField));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const result = await client.getField(101);
+
+      expect(result.base_type).toBe("type/Text");
+      expect(result.semantic_type).toBe("type/Category");
+      expect(result.has_field_values).toBe("list");
+    });
+
+    it("issues GET /api/field/:id with the X-Api-Key header", async () => {
+      const mockFetch = makeFetchMock(200, {
+        id: 101,
+        name: "status",
+        display_name: "Status",
+        base_type: "type/Text",
+        semantic_type: "type/Category",
+        visibility_type: "normal",
+        database_required: true,
+        fk_target_field_id: null,
+        has_field_values: "list",
+        description: null,
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      await client.getField(101);
+
+      const [url, init] = (mockFetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}/api/field/101`);
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-Api-Key"]).toBe(API_KEY);
+    });
+
+    it("throws MetabaseApiError with status 404 when field does not exist", async () => {
+      vi.stubGlobal("fetch", makeFetchMock(404, { message: "Not found." }));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+
+      let caught: unknown;
+      try {
+        await client.getField(9999);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(MetabaseApiError);
+      expect((caught as MetabaseApiError).status).toBe(404);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // getFieldValues()
+  // -------------------------------------------------------------------------
+
+  describe("getFieldValues()", () => {
+    it("returns an object whose values is an array of arrays", async () => {
+      const mockValues = {
+        field_id: 101,
+        values: [["pending"], ["shipped"], ["return_requested"], ["returned"]],
+        human_readable_values: [],
+      };
+      vi.stubGlobal("fetch", makeFetchMock(200, mockValues));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const result = await client.getFieldValues(101);
+
+      expect(Array.isArray(result.values)).toBe(true);
+      expect(result.values[0]).toEqual(["pending"]);
+      expect(result.values.length).toBe(4);
+    });
+
+    it("issues GET /api/field/:id/values with the X-Api-Key header", async () => {
+      const mockFetch = makeFetchMock(200, {
+        field_id: 101,
+        values: [["pending"], ["shipped"]],
+        human_readable_values: [],
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      await client.getFieldValues(101);
+
+      const [url, init] = (mockFetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}/api/field/101/values`);
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-Api-Key"]).toBe(API_KEY);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // getDatabaseMetadata()
   // -------------------------------------------------------------------------
 

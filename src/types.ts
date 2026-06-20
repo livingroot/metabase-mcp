@@ -184,3 +184,18 @@ export interface MetabaseTableQueryMetadata extends MetabaseTable {
   estimated_row_count: number | null;
   fields: MetabaseField[];
 }
+
+/**
+ * Response shape for GET /api/field/:id/values.
+ * Contains the enumerated valid values for a low-cardinality (list) field.
+ * Only fetched when MetabaseField.has_field_values === "list" (Pitfall 3).
+ *
+ * The values array is an array of arrays: each inner array is [rawValue] or
+ * [rawValue, displayValue] when Metabase has human-readable remappings (A5).
+ * Used by the fields_get tool (SCHEMA-05).
+ */
+export interface MetabaseFieldValues {
+  field_id: number;
+  values: unknown[][];           // e.g. [["pending"], ["shipped"]] or [["1", "Active"]]
+  human_readable_values: unknown[];
+}
