@@ -164,7 +164,7 @@ export function createServer(): McpServer {
   server.tool(
     "databases_get_schema",
     "Retrieve the full schema tree for a database: all tables with columns, data types, and display labels. A single call returns the complete DB → tables → fields metadata.",
-    { database_id: z.number().describe("Metabase database ID") },
+    { database_id: z.number().int().positive().describe("Metabase database ID") },
     async ({ database_id }) => {
       try {
         const client = new MetabaseClient({});
@@ -195,7 +195,7 @@ export function createServer(): McpServer {
   server.tool(
     "tables_list",
     "List all tables in a database. Returns ID, name, schema name, and estimated row count as a flat Markdown table. Does not include column-level detail.",
-    { database_id: z.number().describe("Metabase database ID") },
+    { database_id: z.number().int().positive().describe("Metabase database ID") },
     async ({ database_id }) => {
       try {
         const client = new MetabaseClient({});
@@ -237,7 +237,7 @@ export function createServer(): McpServer {
   server.tool(
     "tables_get",
     "Retrieve column-level metadata for a specific table: column names, data types, semantic types, display names, and nullable/required flags.",
-    { table_id: z.number().describe("Metabase table ID") },
+    { table_id: z.number().int().positive().describe("Metabase table ID") },
     async ({ table_id }) => {
       try {
         const client = new MetabaseClient({});
@@ -290,7 +290,7 @@ export function createServer(): McpServer {
   server.tool(
     "fields_get",
     "Retrieve metadata and valid values for a specific field (column): data type, display name, semantic type, and enumerated valid values for low-cardinality fields.",
-    { field_id: z.number().describe("Metabase field ID") },
+    { field_id: z.number().int().positive().describe("Metabase field ID") },
     async ({ field_id }) => {
       try {
         const client = new MetabaseClient({});
