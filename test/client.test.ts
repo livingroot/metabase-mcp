@@ -258,6 +258,95 @@ describe("MetabaseClient", () => {
   });
 
   // -------------------------------------------------------------------------
+  // getTableQueryMetadata()
+  // -------------------------------------------------------------------------
+
+  describe("getTableQueryMetadata()", () => {
+    it("returns an object whose fields array carries base_type, semantic_type, database_required, and visibility_type", async () => {
+      const mockTableMetadata = {
+        id: 10,
+        name: "orders",
+        display_name: "Orders",
+        schema: "public",
+        db_id: 2,
+        description: null,
+        estimated_row_count: 18765,
+        fields: [
+          {
+            id: 101,
+            name: "id",
+            display_name: "ID",
+            base_type: "type/Integer",
+            semantic_type: "type/PK",
+            visibility_type: "normal",
+            database_required: false,
+            fk_target_field_id: null,
+          },
+          {
+            id: 102,
+            name: "status",
+            display_name: "Status",
+            base_type: "type/Text",
+            semantic_type: "type/Category",
+            visibility_type: "normal",
+            database_required: true,
+            fk_target_field_id: null,
+          },
+        ],
+      };
+      vi.stubGlobal("fetch", makeFetchMock(200, mockTableMetadata));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const result = await client.getTableQueryMetadata(10);
+
+      expect(result.id).toBe(10);
+      expect(result.fields[0].base_type).toBe("type/Integer");
+      expect(result.fields[0].semantic_type).toBe("type/PK");
+      expect(result.fields[0].database_required).toBe(false);
+      expect(result.fields[0].visibility_type).toBe("normal");
+      expect(result.fields[1].database_required).toBe(true);
+    });
+
+    it("issues GET /api/table/:id/query_metadata with the X-Api-Key header", async () => {
+      const mockFetch = makeFetchMock(200, {
+        id: 10,
+        name: "orders",
+        display_name: "Orders",
+        schema: "public",
+        db_id: 2,
+        description: null,
+        estimated_row_count: null,
+        fields: [],
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      await client.getTableQueryMetadata(10);
+
+      const [url, init] = (mockFetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}/api/table/10/query_metadata`);
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-Api-Key"]).toBe(API_KEY);
+    });
+
+    it("throws MetabaseApiError with status 404 when the table does not exist", async () => {
+      vi.stubGlobal("fetch", makeFetchMock(404, { message: "Not found." }));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+
+      let caught: unknown;
+      try {
+        await client.getTableQueryMetadata(9999);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(MetabaseApiError);
+      expect((caught as MetabaseApiError).status).toBe(404);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // getDatabaseMetadata()
   // -------------------------------------------------------------------------
 

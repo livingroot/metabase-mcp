@@ -171,3 +171,16 @@ export interface MetabaseDatabaseListResponse {
   data: MetabaseDatabase[];
   total: number;
 }
+
+/**
+ * Response shape for GET /api/table/:id/query_metadata.
+ * Extends MetabaseTable with estimated row count and the full fields array.
+ * Used by the tables_get tool (SCHEMA-04).
+ *
+ * Reuses MetabaseField from the database metadata types above — identical field
+ * shape across both endpoints (database metadata and table query metadata).
+ */
+export interface MetabaseTableQueryMetadata extends MetabaseTable {
+  estimated_row_count: number | null;
+  fields: MetabaseField[];
+}
