@@ -15,7 +15,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { MetabaseClient, MetabaseApiError } from "./client.js";
-import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse } from "./types.js";
+import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseCard } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -589,6 +589,114 @@ export function createServer(): McpServer {
         return {
           isError: true,
           content: [{ type: "text", text: `queries_export error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: cards_list (CARDS-01, CARDS-02)
+  // -------------------------------------------------------------------------
+  // Lists saved questions with optional name substring filter.
+  // Returns a Markdown table with ID, name, description, database ID, creator,
+  // and last-updated date.
+  //
+  // T-04-02: error messages never include METABASE_API_KEY or raw URL
+  // T-04-03: encodeURIComponent applied to name_filter in GET /api/card?q=
+  // T-04-05: escapeMd() applied to all name/description/creator cells
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "cards_list",
+    "List saved questions (cards). Optionally filter by name substring. Returns ID, name, description, database ID, creator, and last-updated date as a Markdown table.",
+    {
+      name_filter: z
+        .string()
+        .optional()
+        .describe("Optional case-insensitive substring to filter card names"),
+    },
+    async ({ name_filter }) => {
+      try {
+        const client = new MetabaseClient({});
+        const cards = await client.listCards(name_filter);
+        const header =
+          "| ID | Name | Description | Database ID | Creator | Updated |\n" +
+          "|----|------|-------------|-------------|---------|---------|";
+        const rows = cards
+          .map(
+            (c) =>
+              `| ${c.id} | ${escapeMd(c.name)} | ${escapeMd(c.description ?? "—")} | ${c.database_id ?? "—"} | ${escapeMd(c.creator?.common_name ?? String(c.creator_id))} | ${escapeMd(c.updated_at)} |`,
+          )
+          .join("\n");
+        const text = rows.length > 0 ? `${header}\n${rows}` : header;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-04-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `cards_list error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: cards_get (CARDS-03)
+  // -------------------------------------------------------------------------
+  // Returns the full saved question including its SQL query definition,
+  // visualization settings presence, and metadata.
+  //
+  // T-04-01: card_id validated with z.number().int().positive() — prevents
+  //          string/path injection into /api/card/:id
+  // T-04-02: error messages never include METABASE_API_KEY or raw URL
+  // T-04-05: escapeMd() applied to text metadata fields
+  // Pitfall 4: MBQL cards have no native.query — guard with type === "native" check
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "cards_get",
+    "Retrieve the full saved question including its SQL query definition, visualization settings, and result metadata. Returns SQL in a fenced code block for native SQL cards.",
+    {
+      card_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("Metabase saved question (card) ID"),
+    },
+    async ({ card_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        const card: MetabaseCard = await client.getCard(card_id);
+        const lines: string[] = [
+          `## ${escapeMd(card.name)} (id=${card.id})`,
+          `**Description:** ${escapeMd(card.description ?? "—")}`,
+          `**Database ID:** ${card.database_id ?? "—"}`,
+          `**Updated:** ${escapeMd(card.updated_at)}`,
+          "",
+        ];
+
+        // SQL extraction — guard for MBQL cards (Pitfall 4)
+        if (card.dataset_query.type === "native") {
+          const sql = card.dataset_query.native?.query ?? "(empty)";
+          lines.push("**Query (SQL):**");
+          lines.push("```sql");
+          lines.push(sql);
+          lines.push("```");
+        } else {
+          lines.push(
+            `(Non-native card — dataset_query type: ${escapeMd(card.dataset_query.type)}. SQL not available; this server creates only native SQL cards.)`,
+          );
+        }
+
+        const text = lines.join("\n");
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-04-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `cards_get error: ${msg}` }],
         };
       }
     },

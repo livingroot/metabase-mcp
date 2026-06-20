@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -278,6 +278,48 @@ export class MetabaseClient {
         })),
       }),
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 4: Card CRUD methods
+  // -------------------------------------------------------------------------
+
+  /**
+   * Returns the list of saved questions (cards) from this Metabase instance.
+   * Calls GET /api/card or GET /api/card?q=<nameFilter> when a filter is provided.
+   *
+   * GET /api/card returns a bare array — NOT a {data, total} envelope (Pitfall 1).
+   * When nameFilter is provided:
+   *   1. Appends ?q=<nameFilter> for server-side filtering (CARDS-02).
+   *   2. Applies client-side .filter() as a safety net in case server q param
+   *      semantics differ (Open Question 1 from 04-RESEARCH.md).
+   *
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async listCards(nameFilter?: string): Promise<MetabaseCardListItem[]> {
+    const path = nameFilter
+      ? `/api/card?q=${encodeURIComponent(nameFilter)}`
+      : "/api/card";
+    const result = await this.request<MetabaseCardListItem[]>(path);
+    // Client-side filter as safety net — cheap and correct (Open Question 1)
+    if (nameFilter) {
+      const lower = nameFilter.toLowerCase();
+      return result.filter((c) => c.name.toLowerCase().includes(lower));
+    }
+    return result;
+  }
+
+  /**
+   * Returns the full saved question (card) including its query definition.
+   * Calls GET /api/card/:id.
+   *
+   * The response includes dataset_query (with native.query for SQL cards),
+   * visualization_settings, and result_metadata (CARDS-03).
+   *
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async getCard(cardId: number): Promise<MetabaseCard> {
+    return this.request<MetabaseCard>(`/api/card/${cardId}`);
   }
 
   /**
