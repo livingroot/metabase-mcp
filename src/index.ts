@@ -702,6 +702,150 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
+  // Tool: cards_create (CARDS-04)
+  // -------------------------------------------------------------------------
+  // Creates a native SQL saved question in Metabase and returns the new card ID.
+  //
+  // T-04-01: database_id validated with z.number().int().positive() — prevents
+  //          string/path injection into the POST body
+  // T-04-02: error messages never include METABASE_API_KEY or raw URL
+  // T-04-08: createCard sends only defined fields — never null
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "cards_create",
+    "Create a native SQL saved question in Metabase from a database ID, SQL query, and display name. Returns the new card ID.",
+    {
+      database_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("Metabase database ID the SQL runs against"),
+      sql: z.string().min(1).describe("Native SQL query body"),
+      name: z.string().min(1).describe("Display name for the saved question"),
+      description: z.string().optional().describe("Optional description"),
+    },
+    async ({ database_id, sql, name, description }) => {
+      try {
+        const client = new MetabaseClient({});
+        const created = await client.createCard(database_id, sql, name, description);
+        return {
+          content: [{ type: "text", text: `Card created successfully. Card ID: ${created.id}` }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-04-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `cards_create error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: cards_update (CARDS-05)
+  // -------------------------------------------------------------------------
+  // Updates a card's name, description, or SQL. Only provided fields are sent
+  // in the PUT body — undefined fields are never sent (T-04-08).
+  //
+  // When updating SQL, database_id is required because Metabase's PUT /api/card/:id
+  // requires a complete dataset_query envelope when changing the query (Pitfall 3).
+  //
+  // T-04-01: card_id validated with z.number().int().positive()
+  // T-04-02: error messages never include METABASE_API_KEY or raw URL
+  // T-04-08: updateCard only includes keys whose value is defined; never sends null
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "cards_update",
+    "Update a saved question's name, description, or SQL. Only the provided fields are changed. Requires database_id when updating sql.",
+    {
+      card_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("Card ID to update"),
+      name: z.string().min(1).optional().describe("New display name"),
+      description: z.string().optional().describe("New description"),
+      sql: z.string().min(1).optional().describe("New SQL query body"),
+      database_id: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Required when updating sql — the database the SQL runs against"),
+    },
+    async ({ card_id, name, description, sql, database_id }) => {
+      // Pitfall 3: dataset_query.database is mandatory when changing SQL
+      if (sql !== undefined && database_id === undefined) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "cards_update error: database_id is required when updating sql",
+            },
+          ],
+        };
+      }
+      try {
+        const client = new MetabaseClient({});
+        await client.updateCard(card_id, { name, description, sql, databaseId: database_id });
+        return {
+          content: [{ type: "text", text: "Card updated successfully." }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-04-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `cards_update error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: cards_delete (CARDS-06)
+  // -------------------------------------------------------------------------
+  // Deletes a saved question by ID. Uses the v0.59 DELETE /api/card/:id endpoint
+  // (hard delete — card is removed permanently).
+  //
+  // T-04-01: card_id validated with z.number().int().positive() — prevents
+  //          string/path injection into the DELETE /api/card/:id URL path
+  // T-04-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "cards_delete",
+    "Delete a saved question by ID. Permanently removes the card from Metabase.",
+    {
+      card_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("Card ID to delete"),
+    },
+    async ({ card_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        await client.deleteCard(card_id);
+        return {
+          content: [{ type: "text", text: "Card deleted successfully." }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-04-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `cards_delete error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 

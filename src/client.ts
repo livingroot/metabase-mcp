@@ -323,6 +323,130 @@ export class MetabaseClient {
   }
 
   /**
+   * Creates a native SQL saved question (card) in Metabase.
+   * Calls POST /api/card with Content-Type: application/json.
+   *
+   * Builds the minimal valid body for a native SQL card:
+   *   - name, display: "table", visualization_settings: {} (all required by the API)
+   *   - dataset_query.native uses the hyphenated "template-tags" key (Pitfall 2 —
+   *     NOT the underscore form used by the /api/dataset execution endpoint)
+   *
+   * Only sends description when it is provided (never sends null to avoid clearing).
+   * Returns the created MetabaseCard including its new id.
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async createCard(
+    databaseId: number,
+    sql: string,
+    name: string,
+    description?: string,
+  ): Promise<MetabaseCard> {
+    const body: Record<string, unknown> = {
+      name,
+      display: "table",
+      visualization_settings: {},
+      dataset_query: {
+        database: databaseId,
+        type: "native",
+        native: {
+          query: sql,
+          "template-tags": {},
+        },
+      },
+    };
+    if (description !== undefined) {
+      body["description"] = description;
+    }
+    return this.request<MetabaseCard>("/api/card", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Updates an existing saved question (card) with partial changes.
+   * Calls PUT /api/card/:id with Content-Type: application/json.
+   *
+   * Only includes keys whose value is defined in updates — never sends null
+   * to avoid accidentally clearing stored fields (T-04-08 / Anti-Pattern).
+   * When updating SQL, the full dataset_query envelope is required including
+   * the database ID (Pitfall 3).
+   *
+   * Returns the updated MetabaseCard.
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async updateCard(
+    cardId: number,
+    updates: {
+      name?: string;
+      description?: string;
+      sql?: string;
+      databaseId?: number;
+    },
+  ): Promise<MetabaseCard> {
+    const body: Record<string, unknown> = {};
+    if (updates.name !== undefined) {
+      body["name"] = updates.name;
+    }
+    if (updates.description !== undefined) {
+      body["description"] = updates.description;
+    }
+    if (updates.sql !== undefined) {
+      // Full dataset_query required when changing SQL — Pitfall 3
+      body["dataset_query"] = {
+        database: updates.databaseId,
+        type: "native",
+        native: {
+          query: updates.sql,
+          "template-tags": {},
+        },
+      };
+    }
+    return this.request<MetabaseCard>(`/api/card/${cardId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Deletes a saved question (card) by ID.
+   * Calls DELETE /api/card/:id.
+   *
+   * DELETE returns 204 No Content with no JSON body. This method does NOT use
+   * this.request<T>() because that helper always calls response.json() and would
+   * throw on an empty response body.
+   *
+   * Note: DELETE is the v0.59 hard-delete path. The soft-delete alternative is
+   * PUT /api/card/:id with {archived:true} — archived cards are excluded from
+   * the default GET /api/card response and satisfy CARDS-06 equally (Pitfall 5).
+   *
+   * Throws MetabaseApiError on non-2xx responses without including the API key
+   * or raw URL in the message (T-04-02 — mirrors the exportCSV error pattern).
+   */
+  async deleteCard(cardId: number): Promise<void> {
+    const url = `${this.baseUrl}/api/card/${cardId}`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        "X-Api-Key": this.apiKey,
+      },
+    });
+
+    if (!response.ok) {
+      // T-04-02: error message must not include apiKey or raw url
+      const text = await response.text();
+      throw new MetabaseApiError(
+        `Metabase API error ${response.status}: ${text}`,
+        response.status,
+        text,
+      );
+    }
+    // 204 No Content — return void
+  }
+
+  /**
    * Exports a full query result set as raw CSV, bypassing Metabase's silent
    * 2,000-row JSON cap by using the /api/dataset/csv endpoint.
    *
