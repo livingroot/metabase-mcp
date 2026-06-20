@@ -15,7 +15,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { MetabaseClient, MetabaseApiError } from "./client.js";
-import type { MetabaseDatabase, MetabaseDatabaseMetadata } from "./types.js";
+import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -172,6 +172,93 @@ export function createServer(): McpServer {
         return {
           isError: true,
           content: [{ type: "text", text: `databases_get_schema error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: tables_list (SCHEMA-03)
+  // -------------------------------------------------------------------------
+  // Lists all tables in a database as a flat Markdown table.
+  // Reuses getDatabaseMetadata — no N+1 calls, no per-table GET /api/table.
+  // Renders only table-level summary: ID, Name, Schema, Est. Rows.
+  // null estimated_row_count → "—" (Pitfall 2, T-02-SC).
+  // Validates database_id with z.number() (T-02-04: path injection prevention).
+  // Per-handler MetabaseClient instantiation (Pitfall 4).
+
+  server.tool(
+    "tables_list",
+    "List all tables in a database. Returns ID, name, schema name, and estimated row count as a flat Markdown table. Does not include column-level detail.",
+    { database_id: z.number().describe("Metabase database ID") },
+    async ({ database_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        const db = await client.getDatabaseMetadata(database_id);
+        const header = "| ID | Name | Schema | Est. Rows |\n|----|------|--------|-----------|\n";
+        const rows = db.tables
+          .map((t) => {
+            const rows =
+              t.estimated_row_count != null
+                ? t.estimated_row_count.toLocaleString()
+                : "—";
+            return `| ${t.id} | ${t.name} | ${t.schema ?? "default"} | ${rows} |`;
+          })
+          .join("\n");
+        const text = rows.length > 0 ? `${header}${rows}` : header;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-02-05: never echo METABASE_API_KEY
+        return {
+          isError: true,
+          content: [{ type: "text", text: `tables_list error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: tables_get (SCHEMA-04)
+  // -------------------------------------------------------------------------
+  // Returns column-level metadata for a single table.
+  // Calls GET /api/table/:id/query_metadata via getTableQueryMetadata.
+  // Renders a Markdown table: Column, Display Name, Type, Semantic Type, Required, Visibility.
+  // database_required → Required column (NOT NULL proxy; true → "yes", false → "no").
+  // null estimated_row_count → "—" in the table heading (Pitfall 2).
+  // Validates table_id with z.number() (T-02-04: path injection prevention).
+  // Per-handler MetabaseClient instantiation (Pitfall 4).
+
+  server.tool(
+    "tables_get",
+    "Retrieve column-level metadata for a specific table: column names, data types, semantic types, display names, and nullable/required flags.",
+    { table_id: z.number().describe("Metabase table ID") },
+    async ({ table_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        const table: MetabaseTableQueryMetadata = await client.getTableQueryMetadata(table_id);
+        const rowCount =
+          table.estimated_row_count != null
+            ? `~${table.estimated_row_count.toLocaleString()} rows`
+            : "row count unknown";
+        const heading = `## Table: ${table.name} (id=${table.id}, schema=${table.schema ?? "default"}, ${rowCount})\n`;
+        const header =
+          "| Column | Display Name | Type | Semantic Type | Required | Visibility |\n" +
+          "|--------|--------------|------|---------------|----------|------------|\n";
+        const rows = table.fields
+          .map(
+            (f) =>
+              `| ${f.name} | ${f.display_name} | ${f.base_type} | ${f.semantic_type ?? "—"} | ${f.database_required ? "yes" : "no"} | ${f.visibility_type} |`,
+          )
+          .join("\n");
+        const text = `${heading}${header}${rows}`;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-02-05: never echo METABASE_API_KEY
+        return {
+          isError: true,
+          content: [{ type: "text", text: `tables_get error: ${msg}` }],
         };
       }
     },

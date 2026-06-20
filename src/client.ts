@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -174,5 +174,17 @@ export class MetabaseClient {
    */
   async getDatabaseMetadata(databaseId: number): Promise<MetabaseDatabaseMetadata> {
     return this.request<MetabaseDatabaseMetadata>(`/api/database/${databaseId}/metadata`);
+  }
+
+  /**
+   * Returns column-level metadata for a single table.
+   * Calls GET /api/table/:id/query_metadata.
+   *
+   * Returns the table with its full fields array — each field carries base_type,
+   * semantic_type, visibility_type, and database_required (NOT NULL proxy).
+   * Throws MetabaseApiError on non-2xx responses (e.g. 404 for unknown table_id).
+   */
+  async getTableQueryMetadata(tableId: number): Promise<MetabaseTableQueryMetadata> {
+    return this.request<MetabaseTableQueryMetadata>(`/api/table/${tableId}/query_metadata`);
   }
 }
