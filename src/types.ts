@@ -199,3 +199,59 @@ export interface MetabaseFieldValues {
   values: unknown[][];           // e.g. [["pending"], ["shipped"]] or [["1", "Active"]]
   human_readable_values: unknown[];
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3: Query Execution types
+// ---------------------------------------------------------------------------
+
+/**
+ * A column descriptor returned within a dataset response.
+ * Used by formatQueryResult() to build Markdown table headers.
+ *
+ * name:         internal column identifier (e.g. "created_at")
+ * display_name: human-readable label used as the Markdown column header
+ * base_type:    optional data type string (e.g. "type/Integer")
+ * special_type: semantic type alias on older Metabase versions
+ */
+export interface MetabaseDatasetColumn {
+  name: string;
+  display_name: string;
+  base_type?: string;
+  special_type?: string;
+}
+
+/**
+ * Response shape for POST /api/dataset and POST /api/card/:id/query.
+ *
+ * data, data.cols, and data.rows are intentionally optional (?) per Pitfall 4:
+ * MBQL (GUI-built) saved questions may omit them; handlers must guard defensively.
+ *
+ * row_count: number of rows in this response (same as data.rows.length in practice)
+ * status:    "completed" | "failed"
+ * error:     present when status === "failed"
+ */
+export interface MetabaseDatasetResponse {
+  data?: {
+    cols?: MetabaseDatasetColumn[];
+    rows?: unknown[][];
+  };
+  row_count: number;
+  status: string;
+  error?: string;
+}
+
+/**
+ * Simplified parameter shape exposed to agents for queries_execute_sql and cards_execute.
+ *
+ * The MCP server maps this to Metabase's internal wire format:
+ *   { type, value, target: ["variable", ["template-tag", name]] }
+ *
+ * name:  template tag name — must match {{name}} placeholder in SQL (case-sensitive)
+ * value: value to bind to this tag
+ * type:  Metabase parameter type (e.g. "category", "date/single"); defaults to "category"
+ */
+export interface MetabaseQueryParameter {
+  name: string;
+  value: string;
+  type?: string;
+}

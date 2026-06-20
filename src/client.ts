@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -213,5 +213,40 @@ export class MetabaseClient {
    */
   async getFieldValues(fieldId: number): Promise<MetabaseFieldValues> {
     return this.request<MetabaseFieldValues>(`/api/field/${fieldId}/values`);
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 3: Query Execution methods
+  // -------------------------------------------------------------------------
+
+  /**
+   * Executes raw SQL against a Metabase database.
+   * Calls POST /api/dataset with Content-Type: application/json.
+   *
+   * Maps each parameter from simplified {name, value, type?} to Metabase's
+   * internal wire format: {type, value, target: ["variable", ["template-tag", name]]}.
+   * type defaults to "category" when omitted (D-05 from 03-CONTEXT.md).
+   *
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async executeSQL(
+    databaseId: number,
+    sql: string,
+    parameters: MetabaseQueryParameter[] = [],
+  ): Promise<MetabaseDatasetResponse> {
+    return this.request<MetabaseDatasetResponse>("/api/dataset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        database: databaseId,
+        type: "native",
+        native: { query: sql, template_tags: {} },
+        parameters: parameters.map((p) => ({
+          type: p.type ?? "category",
+          value: p.value,
+          target: ["variable", ["template-tag", p.name]],
+        })),
+      }),
+    });
   }
 }
