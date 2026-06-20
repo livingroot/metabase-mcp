@@ -21,6 +21,11 @@ import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMeta
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
+/** Escapes characters that break Markdown table cells: pipes and newlines. */
+function escapeMd(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/[\n\r]/g, " ");
+}
+
 /**
  * Formats a MetabaseDatabaseMetadata object as a hierarchical Markdown string.
  *
@@ -37,7 +42,7 @@ import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMeta
  */
 function formatDatabaseSchema(db: MetabaseDatabaseMetadata): string {
   const lines: string[] = [
-    `## Database: ${db.name} (id=${db.id}, engine=${db.engine})`,
+    `## Database: ${escapeMd(db.name)} (id=${db.id}, engine=${escapeMd(db.engine)})`,
     "",
   ];
 
@@ -47,13 +52,13 @@ function formatDatabaseSchema(db: MetabaseDatabaseMetadata): string {
         ? `~${table.estimated_row_count.toLocaleString()} rows`
         : "row count unknown";
     lines.push(
-      `### Table: ${table.name} (id=${table.id}, schema=${table.schema ?? "default"}, ${rowCount})`,
+      `### Table: ${escapeMd(table.name)} (id=${table.id}, schema=${escapeMd(table.schema ?? "default")}, ${rowCount})`,
     );
     lines.push("| Column | Display Name | Type | Semantic Type | Required |");
     lines.push("|--------|-------------|------|---------------|---------|");
     for (const field of table.fields) {
       lines.push(
-        `| ${field.name} | ${field.display_name} | ${field.base_type} | ${field.semantic_type ?? "—"} | ${field.database_required ? "yes" : "no"} |`,
+        `| ${escapeMd(field.name)} | ${escapeMd(field.display_name)} | ${escapeMd(field.base_type)} | ${escapeMd(field.semantic_type ?? "—")} | ${field.database_required ? "yes" : "no"} |`,
       );
     }
     lines.push("");
@@ -133,7 +138,7 @@ export function createServer(): McpServer {
         const rows = dbs
           .map(
             (db) =>
-              `| ${db.id} | ${db.name} | ${db.engine} | ${db.is_full_sync ? "yes" : "no"} |`,
+              `| ${db.id} | ${escapeMd(db.name)} | ${escapeMd(db.engine)} | ${db.is_full_sync ? "yes" : "no"} |`,
           )
           .join("\n");
         const text = rows.length > 0 ? `${header}\n${rows}` : `${header}`;
@@ -198,11 +203,11 @@ export function createServer(): McpServer {
         const header = "| ID | Name | Schema | Est. Rows |\n|----|------|--------|-----------|\n";
         const rows = db.tables
           .map((t) => {
-            const rows =
+            const rowCount =
               t.estimated_row_count != null
                 ? t.estimated_row_count.toLocaleString()
                 : "—";
-            return `| ${t.id} | ${t.name} | ${t.schema ?? "default"} | ${rows} |`;
+            return `| ${t.id} | ${escapeMd(t.name)} | ${escapeMd(t.schema ?? "default")} | ${rowCount} |`;
           })
           .join("\n");
         const text = rows.length > 0 ? `${header}${rows}` : header;
@@ -241,14 +246,14 @@ export function createServer(): McpServer {
           table.estimated_row_count != null
             ? `~${table.estimated_row_count.toLocaleString()} rows`
             : "row count unknown";
-        const heading = `## Table: ${table.name} (id=${table.id}, schema=${table.schema ?? "default"}, ${rowCount})\n`;
+        const heading = `## Table: ${escapeMd(table.name)} (id=${table.id}, schema=${escapeMd(table.schema ?? "default")}, ${rowCount})\n`;
         const header =
           "| Column | Display Name | Type | Semantic Type | Required | Visibility |\n" +
           "|--------|--------------|------|---------------|----------|------------|\n";
         const rows = table.fields
           .map(
             (f) =>
-              `| ${f.name} | ${f.display_name} | ${f.base_type} | ${f.semantic_type ?? "—"} | ${f.database_required ? "yes" : "no"} | ${f.visibility_type} |`,
+              `| ${escapeMd(f.name)} | ${escapeMd(f.display_name)} | ${escapeMd(f.base_type)} | ${escapeMd(f.semantic_type ?? "—")} | ${f.database_required ? "yes" : "no"} | ${escapeMd(f.visibility_type)} |`,
           )
           .join("\n");
         const text = `${heading}${header}${rows}`;
@@ -297,10 +302,10 @@ export function createServer(): McpServer {
         );
 
         const lines: string[] = [
-          `**Field:** ${field.name} (id=${field.id})`,
-          `**Display Name:** ${field.display_name}`,
-          `**Type:** ${field.base_type}`,
-          `**Semantic Type:** ${field.semantic_type ?? "—"}`,
+          `**Field:** ${escapeMd(field.name)} (id=${field.id})`,
+          `**Display Name:** ${escapeMd(field.display_name)}`,
+          `**Type:** ${escapeMd(field.base_type)}`,
+          `**Semantic Type:** ${escapeMd(field.semantic_type ?? "—")}`,
           `**Required:** ${field.database_required ? "yes" : "no"}`,
           "",
         ];
@@ -311,7 +316,7 @@ export function createServer(): McpServer {
             const fieldValues: MetabaseFieldValues = await client.getFieldValues(field_id);
             // Flatten inner arrays: [["pending"], ["shipped"]] → "pending, shipped"
             const valueList = fieldValues.values
-              .map((innerArr) => String(innerArr[0] ?? ""))
+              .map((innerArr) => escapeMd(String(innerArr[0] ?? "")))
               .filter((v) => v.length > 0)
               .join(", ");
             lines.push("**Valid Values:**");
