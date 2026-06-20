@@ -454,6 +454,18 @@ export function createServer(): McpServer {
       try {
         const client = new MetabaseClient({});
         const response = await client.executeSQL(database_id, sql, parameters);
+        // Guard for Metabase query failures (bad SQL, missing table, permission denied)
+        if (response.status === "failed") {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `queries_execute_sql error: Query failed — ${response.error ?? "unknown error"}`,
+              },
+            ],
+          };
+        }
         const text = formatQueryResult(response, max_rows);
         return { content: [{ type: "text", text }] };
       } catch (err) {
@@ -523,6 +535,18 @@ export function createServer(): McpServer {
               {
                 type: "text",
                 text: "cards_execute error: Unsupported card type — only native SQL cards are fully supported.",
+              },
+            ],
+          };
+        }
+        // Guard for Metabase query failures (bad SQL, missing table, permission denied)
+        if (response.status === "failed") {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `cards_execute error: Query failed — ${response.error ?? "unknown error"}`,
               },
             ],
           };
