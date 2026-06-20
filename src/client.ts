@@ -279,4 +279,64 @@ export class MetabaseClient {
       }),
     });
   }
+
+  /**
+   * Exports a full query result set as raw CSV, bypassing Metabase's silent
+   * 2,000-row JSON cap by using the /api/dataset/csv endpoint.
+   *
+   * IMPORTANT: This method does NOT use this.request<T>() because that helper
+   * always calls response.json(), which would throw on raw CSV text (Pitfall 2).
+   *
+   * The endpoint requires application/x-www-form-urlencoded encoding with a
+   * single `query` field containing the URL-encoded JSON query body (Pitfall 1 —
+   * sending application/json causes a 400 error).
+   *
+   * Maps each parameter from simplified {name, value, type?} to Metabase's
+   * internal wire format, identical to executeSQL (D-05 from 03-CONTEXT.md).
+   *
+   * Returns the raw CSV text on success (D-08 from 03-CONTEXT.md).
+   * Throws MetabaseApiError on non-2xx responses without including the API key
+   * or raw URL (T-03-08).
+   */
+  async exportCSV(
+    databaseId: number,
+    sql: string,
+    parameters: MetabaseQueryParameter[] = [],
+  ): Promise<string> {
+    const queryBody = {
+      database: databaseId,
+      type: "native",
+      native: { query: sql, template_tags: {} },
+      parameters: parameters.map((p) => ({
+        type: p.type ?? "category",
+        value: p.value,
+        target: ["variable", ["template-tag", p.name]],
+      })),
+    };
+
+    const url = `${this.baseUrl}/api/dataset/csv`;
+    const body = `query=${encodeURIComponent(JSON.stringify(queryBody))}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-Api-Key": this.apiKey,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+
+    if (!response.ok) {
+      // Read error body as text — never call .json() on error responses either.
+      // T-03-08: error message must not include apiKey or raw url.
+      const text = await response.text();
+      throw new MetabaseApiError(
+        `Metabase API error ${response.status}: ${text}`,
+        response.status,
+        text,
+      );
+    }
+
+    return response.text();
+  }
 }
