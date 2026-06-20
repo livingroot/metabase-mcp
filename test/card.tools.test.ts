@@ -393,6 +393,20 @@ describe("MCP card tools", () => {
       const text = (res.content[0] as { type: string; text: string }).text;
       expect(text).toContain("101");
     });
+
+    it("returns isError: true on a non-2xx API response and does not leak the API key", async () => {
+      vi.stubGlobal("fetch", makeFetchMock(400, { message: "Invalid query" }));
+
+      const res = await client.callTool({
+        name: "cards_create",
+        arguments: { database_id: 1, sql: "SELECT 1", name: "Test" },
+      });
+
+      expect(res.isError).toBe(true);
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("cards_create");
+      expect(text).not.toContain("test-key-card-tools");
+    });
   });
 
   // -------------------------------------------------------------------------
