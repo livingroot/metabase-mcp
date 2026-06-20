@@ -15,7 +15,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { MetabaseClient, MetabaseApiError } from "./client.js";
-import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata } from "./types.js";
+import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -259,6 +259,83 @@ export function createServer(): McpServer {
         return {
           isError: true,
           content: [{ type: "text", text: `tables_get error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: fields_get (SCHEMA-05)
+  // -------------------------------------------------------------------------
+  // Returns metadata for a single field plus its enumerated valid values when
+  // the field is low-cardinality (has_field_values === "list").
+  //
+  // Two-call pattern (SCHEMA-05 implementation steps 1-3, Pitfall 3):
+  //   1. Call getField(field_id) for metadata.
+  //   2. If has_field_values === "list", call getFieldValues(field_id) inside
+  //      its own try/catch — a failure degrades to a "not available" note rather
+  //      than failing the whole tool (Pitfall 3 graceful degradation).
+  //   3. For any other has_field_values value (search, none, null): skip the
+  //      second call entirely; render a not-applicable marker.
+  //
+  // Validates field_id with z.number() (T-02-06: path injection prevention).
+  // Per-handler MetabaseClient instantiation (Pitfall 4).
+  // Optionally logs has_field_values to stderr (A3 from 02-RESEARCH.md).
+
+  server.tool(
+    "fields_get",
+    "Retrieve metadata and valid values for a specific field (column): data type, display name, semantic type, and enumerated valid values for low-cardinality fields.",
+    { field_id: z.number().describe("Metabase field ID") },
+    async ({ field_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        const field: MetabaseField = await client.getField(field_id);
+
+        // Log the observed has_field_values sentinel to stderr for debugging (A3).
+        console.error(
+          `[metabase-mcp] fields_get: field_id=${field_id} has_field_values=${String(field.has_field_values ?? "null")}`,
+        );
+
+        const lines: string[] = [
+          `**Field:** ${field.name} (id=${field.id})`,
+          `**Display Name:** ${field.display_name}`,
+          `**Type:** ${field.base_type}`,
+          `**Semantic Type:** ${field.semantic_type ?? "—"}`,
+          `**Required:** ${field.database_required ? "yes" : "no"}`,
+          "",
+        ];
+
+        if (field.has_field_values === "list") {
+          // Fetch valid values — degrade gracefully on failure (Pitfall 3).
+          try {
+            const fieldValues: MetabaseFieldValues = await client.getFieldValues(field_id);
+            // Flatten inner arrays: [["pending"], ["shipped"]] → "pending, shipped"
+            const valueList = fieldValues.values
+              .map((innerArr) => String(innerArr[0] ?? ""))
+              .filter((v) => v.length > 0)
+              .join(", ");
+            lines.push("**Valid Values:**");
+            lines.push(valueList.length > 0 ? valueList : "(none)");
+          } catch (valErr) {
+            // Values call failed — return metadata only (graceful degradation).
+            const valMsg = valErr instanceof Error ? valErr.message : String(valErr);
+            console.error(`[metabase-mcp] fields_get: values call failed — ${valMsg}`);
+            lines.push("**Valid Values:** (not available — values fetch failed)");
+          }
+        } else {
+          // High-cardinality or non-enumerable field — skip /values call.
+          // has_field_values is "search", "none", or null.
+          lines.push("**Valid Values:** N/A (high cardinality or search-type field)");
+        }
+
+        const text = lines.join("\n");
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-02-08: never echo METABASE_API_KEY
+        return {
+          isError: true,
+          content: [{ type: "text", text: `fields_get error: ${msg}` }],
         };
       }
     },

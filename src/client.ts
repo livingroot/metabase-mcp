@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -186,5 +186,30 @@ export class MetabaseClient {
    */
   async getTableQueryMetadata(tableId: number): Promise<MetabaseTableQueryMetadata> {
     return this.request<MetabaseTableQueryMetadata>(`/api/table/${tableId}/query_metadata`);
+  }
+
+  /**
+   * Returns metadata for a single field (column).
+   * Calls GET /api/field/:id.
+   *
+   * Returns a MetabaseField object including base_type, semantic_type,
+   * has_field_values, and display_name.
+   * Throws MetabaseApiError on non-2xx responses (e.g. 404 for unknown field_id).
+   */
+  async getField(fieldId: number): Promise<MetabaseField> {
+    return this.request<MetabaseField>(`/api/field/${fieldId}`);
+  }
+
+  /**
+   * Returns the enumerated valid values for a low-cardinality field.
+   * Calls GET /api/field/:id/values.
+   *
+   * Should only be called when MetabaseField.has_field_values === "list"
+   * (Pitfall 3 from 02-RESEARCH.md: skip for "search", "none", and null).
+   * Returns values as an array of arrays (e.g. [["pending"], ["shipped"]]).
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async getFieldValues(fieldId: number): Promise<MetabaseFieldValues> {
+    return this.request<MetabaseFieldValues>(`/api/field/${fieldId}/values`);
   }
 }
