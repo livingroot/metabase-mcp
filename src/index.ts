@@ -540,6 +540,60 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
+  // Tool: queries_export (QUERY-04)
+  // -------------------------------------------------------------------------
+  // Exports a full query result set as raw CSV text by calling the
+  // /api/dataset/csv endpoint, which bypasses Metabase's silent 2,000-row
+  // JSON cap that queries_execute_sql hits.
+  //
+  // No max_rows parameter — CSV export returns the full result set (D-08).
+  // Returns raw CSV as a single text content item with no Markdown formatting (D-08).
+  //
+  // T-03-07: database_id validated with z.number().int().positive()
+  // T-03-08: error messages never include METABASE_API_KEY or request URL
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "queries_export",
+    "Export a full query result set as raw CSV text via /api/dataset/csv. Bypasses the 2,000-row JSON cap that queries_execute_sql hits. Returns the complete result set with no row limit.",
+    {
+      database_id: z.number().int().positive().describe("Metabase database ID"),
+      sql: z.string().describe("SQL query to export"),
+      parameters: z
+        .array(
+          z.object({
+            name: z
+              .string()
+              .describe("Template tag name matching {{name}} in SQL"),
+            value: z.string().describe("Value to bind to this tag"),
+            type: z
+              .string()
+              .optional()
+              .describe(
+                "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
+              ),
+          }),
+        )
+        .optional()
+        .describe("Filter parameters for {{template_tag}} placeholders in SQL"),
+    },
+    async ({ database_id, sql, parameters }) => {
+      try {
+        const client = new MetabaseClient({});
+        const csv = await client.exportCSV(database_id, sql, parameters);
+        return { content: [{ type: "text", text: csv }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-03-08: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `queries_export error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 
