@@ -469,6 +469,7 @@ describe("MCP card tools", () => {
       });
       expect(res.isError).toBe(true);
       const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("cards_update");
       expect(text).not.toContain("test-key-card-tools");
     });
   });
