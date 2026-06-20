@@ -441,7 +441,12 @@ export class MetabaseClient {
 
     if (!response.ok) {
       // T-04-02: error message must not include apiKey or raw url
-      const text = await response.text();
+      let text: string;
+      try {
+        text = await response.text();
+      } catch {
+        text = response.statusText;
+      }
       throw new MetabaseApiError(
         `Metabase API error ${response.status}: ${text}`,
         response.status,
@@ -500,7 +505,12 @@ export class MetabaseClient {
     if (!response.ok) {
       // Read error body as text — never call .json() on error responses either.
       // T-03-08: error message must not include apiKey or raw url.
-      const text = await response.text();
+      let text: string;
+      try {
+        text = await response.text();
+      } catch {
+        text = response.statusText;
+      }
       throw new MetabaseApiError(
         `Metabase API error ${response.status}: ${text}`,
         response.status,
