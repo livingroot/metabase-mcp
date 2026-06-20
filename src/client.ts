@@ -393,6 +393,11 @@ export class MetabaseClient {
       body["description"] = updates.description;
     }
     if (updates.sql !== undefined) {
+      if (updates.databaseId === undefined) {
+        throw new Error(
+          "updateCard: databaseId is required when updating sql",
+        );
+      }
       // Full dataset_query required when changing SQL — Pitfall 3
       body["dataset_query"] = {
         database: updates.databaseId,
