@@ -220,6 +220,36 @@ export class MetabaseClient {
   // -------------------------------------------------------------------------
 
   /**
+   * Executes a saved Metabase question (card) by ID.
+   * Calls POST /api/card/:id/query with Content-Type: application/json.
+   *
+   * Maps each parameter from simplified {name, value, type?} to Metabase's
+   * internal wire format: {type, value, target: ["variable", ["template-tag", name]]}.
+   * type defaults to "category" when omitted (D-05 from 03-CONTEXT.md).
+   *
+   * The request body contains only parameters — no database/native fields
+   * because the card carries its own stored query (D-14 from 03-CONTEXT.md).
+   *
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async executeCard(
+    cardId: number,
+    parameters: MetabaseQueryParameter[] = [],
+  ): Promise<MetabaseDatasetResponse> {
+    return this.request<MetabaseDatasetResponse>(`/api/card/${cardId}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        parameters: parameters.map((p) => ({
+          type: p.type ?? "category",
+          value: p.value,
+          target: ["variable", ["template-tag", p.name]],
+        })),
+      }),
+    });
+  }
+
+  /**
    * Executes raw SQL against a Metabase database.
    * Calls POST /api/dataset with Content-Type: application/json.
    *
