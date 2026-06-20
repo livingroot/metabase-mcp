@@ -46,20 +46,51 @@ export interface MetabaseTable {
 }
 
 /**
- * Represents a saved question (card) returned by GET /api/card/:id.
- * Used by card CRUD tools in Phase 4.
+ * Represents a saved question (card) as returned in the list by GET /api/card.
+ * Used by cards_list and as the base for MetabaseCard.
+ *
+ * Note: creator is marked optional because list items in some Metabase versions
+ * may carry only creator_id (Open Question 3 from 04-RESEARCH.md). Handlers
+ * should fall back to creator_id when creator is absent.
  */
-export interface MetabaseCard {
+export interface MetabaseCardListItem {
   id: number;
   name: string;
   description: string | null;
-  display: string;
-  type: string;
   database_id: number | null;
-  dataset_query: Record<string, unknown>;
-  visualization_settings: Record<string, unknown>;
-  created_at: string;
+  creator?: {
+    id: number;
+    common_name: string;
+    email: string;
+  };
+  creator_id: number;
   updated_at: string;
+  created_at: string;
+  display: string;
+  archived: boolean;
+}
+
+/**
+ * Represents a saved question (card) returned by GET /api/card/:id.
+ * Extends MetabaseCardListItem with the full query definition, visualization
+ * settings, and result metadata. Used by card CRUD tools in Phase 4.
+ *
+ * dataset_query.type distinguishes native SQL ("native") from MBQL GUI-built
+ * questions ("query"). The native sub-shape is only present when type === "native".
+ * Use the hyphenated "template-tags" key — not "template_tags" (Pitfall 2).
+ */
+export interface MetabaseCard extends MetabaseCardListItem {
+  dataset_query: {
+    type: string;                      // "native" | "query"
+    database: number;
+    native?: {
+      query: string;                   // the SQL (only present when type === "native")
+      "template-tags": Record<string, unknown>;
+    };
+    query?: Record<string, unknown>;   // MBQL query (only present when type === "query")
+  };
+  visualization_settings: Record<string, unknown>;
+  result_metadata: unknown[] | null;
 }
 
 /**
