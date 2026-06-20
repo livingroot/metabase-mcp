@@ -446,6 +446,31 @@ describe("MCP card tools", () => {
       const text = (res.content[0] as { type: string; text: string }).text;
       expect(text.toLowerCase()).toContain("updated");
     });
+
+    it("returns isError: true when sql is provided without database_id", async () => {
+      // No fetch mock needed — guard fires before any API call
+      const res = await client.callTool({
+        name: "cards_update",
+        arguments: { card_id: 1, sql: "SELECT 1" },
+      });
+      expect(res.isError).toBe(true);
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("database_id is required");
+    });
+
+    it("returns isError: true on a non-2xx API response and does not leak the API key", async () => {
+      vi.stubGlobal(
+        "fetch",
+        makeFetchMock(403, { message: "Forbidden" }),
+      );
+      const res = await client.callTool({
+        name: "cards_update",
+        arguments: { card_id: 1, name: "Attempt" },
+      });
+      expect(res.isError).toBe(true);
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).not.toContain("test-key-card-tools");
+    });
   });
 
   // -------------------------------------------------------------------------
