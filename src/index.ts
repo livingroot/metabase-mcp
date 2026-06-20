@@ -703,9 +703,11 @@ export function createServer(): McpServer {
         // SQL extraction — guard for MBQL cards (Pitfall 4)
         if (card.dataset_query.type === "native") {
           const sql = card.dataset_query.native?.query ?? "(empty)";
+          // Escape triple-backtick sequences so they cannot break the fenced block
+          const safeSql = sql.replace(/```/g, "\\`\\`\\`");
           lines.push("**Query (SQL):**");
           lines.push("```sql");
-          lines.push(sql);
+          lines.push(safeSql);
           lines.push("```");
         } else {
           lines.push(
