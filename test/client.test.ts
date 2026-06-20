@@ -209,4 +209,125 @@ describe("MetabaseClient", () => {
     expect(apiErr.status).toBe(503);
     expect(apiErr.message.length).toBeGreaterThan(0);
   });
+
+  // -------------------------------------------------------------------------
+  // listDatabases()
+  // -------------------------------------------------------------------------
+
+  describe("listDatabases()", () => {
+    it("returns the raw response when fetch resolves a plain array body", async () => {
+      const mockData = [
+        { id: 1, name: "Sample Database", engine: "h2", is_full_sync: true, is_sample: true },
+        { id: 2, name: "Production", engine: "postgres", is_full_sync: true, is_sample: false },
+      ];
+      vi.stubGlobal("fetch", makeFetchMock(200, mockData));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const result = await client.listDatabases();
+
+      // Client returns the raw response; handler normalises shape
+      expect(result).toEqual(mockData);
+    });
+
+    it("returns the raw envelope object when fetch resolves a { data: [], total } body", async () => {
+      const mockEnvelope = {
+        data: [{ id: 1, name: "Sample Database", engine: "h2", is_full_sync: true, is_sample: true }],
+        total: 1,
+      };
+      vi.stubGlobal("fetch", makeFetchMock(200, mockEnvelope));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const result = await client.listDatabases();
+
+      // Raw envelope returned as-is — handler normalises with Array.isArray guard
+      expect(result).toEqual(mockEnvelope);
+    });
+
+    it("issues GET /api/database with the X-Api-Key header", async () => {
+      const mockFetch = makeFetchMock(200, []);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      await client.listDatabases();
+
+      const [url, init] = (mockFetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}/api/database`);
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-Api-Key"]).toBe(API_KEY);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // getDatabaseMetadata()
+  // -------------------------------------------------------------------------
+
+  describe("getDatabaseMetadata()", () => {
+    it("returns an object whose tables[0].fields[0] carries base_type and semantic_type", async () => {
+      const mockMetadata = {
+        id: 2,
+        name: "Production DB",
+        engine: "postgres",
+        tables: [
+          {
+            id: 10,
+            name: "orders",
+            display_name: "Orders",
+            schema: "public",
+            db_id: 2,
+            description: null,
+            estimated_row_count: 18765,
+            fields: [
+              {
+                id: 101,
+                name: "id",
+                display_name: "ID",
+                base_type: "type/Integer",
+                semantic_type: "type/PK",
+                visibility_type: "normal",
+                database_required: false,
+                fk_target_field_id: null,
+              },
+            ],
+          },
+        ],
+      };
+      vi.stubGlobal("fetch", makeFetchMock(200, mockMetadata));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      const result = await client.getDatabaseMetadata(2);
+
+      expect(result.id).toBe(2);
+      expect(result.tables[0].fields[0].base_type).toBe("type/Integer");
+      expect(result.tables[0].fields[0].semantic_type).toBe("type/PK");
+    });
+
+    it("issues GET /api/database/:id/metadata with the X-Api-Key header", async () => {
+      const mockFetch = makeFetchMock(200, { id: 1, name: "db", engine: "h2", tables: [] });
+      vi.stubGlobal("fetch", mockFetch);
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+      await client.getDatabaseMetadata(1);
+
+      const [url, init] = (mockFetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`${BASE_URL}/api/database/1/metadata`);
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-Api-Key"]).toBe(API_KEY);
+    });
+
+    it("throws MetabaseApiError with status 404 when the database does not exist", async () => {
+      vi.stubGlobal("fetch", makeFetchMock(404, { message: "Not found." }));
+
+      const client = new MetabaseClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+
+      let caught: unknown;
+      try {
+        await client.getDatabaseMetadata(9999);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(MetabaseApiError);
+      expect((caught as MetabaseApiError).status).toBe(404);
+    });
+  });
 });

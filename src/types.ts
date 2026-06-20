@@ -120,3 +120,54 @@ export interface MetabaseApiErrorBody {
   message?: string;
   errors?: Record<string, string[]>;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2: Schema Discovery types
+// ---------------------------------------------------------------------------
+
+/**
+ * A field (column) within a Metabase table.
+ * Returned as part of GET /api/database/:id/metadata and GET /api/table/:id/query_metadata.
+ */
+export interface MetabaseField {
+  id: number;
+  name: string;
+  display_name: string;
+  base_type: string;             // e.g. "type/Integer", "type/Text", "type/DateTime"
+  semantic_type: string | null;  // e.g. "type/PK", "type/FK", "type/Name", null
+  visibility_type: string;       // "normal" | "details-only" | "hidden" | "retired"
+  database_required: boolean;    // NOT NULL constraint proxy
+  fk_target_field_id: number | null;
+  has_field_values?: string | null; // "list" | "search" | "none" | null
+  description?: string | null;
+}
+
+/**
+ * Response shape for GET /api/database/:id/metadata.
+ * Contains the complete database → tables → fields tree.
+ */
+export interface MetabaseDatabaseMetadata {
+  id: number;
+  name: string;
+  engine: string;
+  tables: MetabaseTableWithFields[];
+}
+
+/**
+ * Table as returned within database metadata — extends MetabaseTable with
+ * estimated row count and nested fields array.
+ * Used by GET /api/database/:id/metadata.
+ */
+export interface MetabaseTableWithFields extends MetabaseTable {
+  estimated_row_count: number | null;
+  fields: MetabaseField[];
+}
+
+/**
+ * Response shape for GET /api/database (list endpoint).
+ * The endpoint may return a plain array OR this envelope — both shapes are handled.
+ */
+export interface MetabaseDatabaseListResponse {
+  data: MetabaseDatabase[];
+  total: number;
+}
