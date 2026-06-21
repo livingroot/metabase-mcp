@@ -885,7 +885,6 @@ export function createServer(): McpServer {
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // T-5-05: escapeMd() applied to all name/description cells
   // D-12: per-handler MetabaseClient instantiation
-
   server.tool(
     "dashboards_list",
     "List dashboards. Optionally filter by name substring. Returns ID, name, description, card count, and last-updated date as a Markdown table.",
@@ -917,6 +916,84 @@ export function createServer(): McpServer {
         return {
           isError: true,
           content: [{ type: "text", text: `dashboards_list error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_get (DASH-03)
+  // -------------------------------------------------------------------------
+  // Returns full dashboard details: name, description, filter parameter
+  // definitions, and all placed cards with positions and two-tier IDs.
+  //
+  // The "Dashcard ID" column is the placement id the agent must use for
+  // remove/update/connect operations (Pitfall 1 — two-tier ID model).
+  //
+  // T-5-path: dashboard_id validated with z.number().int().positive() — prevents
+  //           string/path injection into /api/dashboard/:id
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // T-5-05: escapeMd() applied to all name/description/parameter cells
+  // D-12: per-handler MetabaseClient instantiation
+  server.tool(
+    "dashboards_get",
+    "Retrieve full dashboard details: name, description, filter parameter definitions, and all placed cards with their positions, sizes, and dashcard IDs.",
+    {
+      dashboard_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("Metabase dashboard ID"),
+    },
+    async ({ dashboard_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        const dashboard = await client.getDashboard(dashboard_id);
+
+        const lines: string[] = [
+          `## ${escapeMd(dashboard.name)} (id=${dashboard.id})`,
+          `**Description:** ${escapeMd(dashboard.description ?? "—")}`,
+          `**Updated:** ${escapeMd(dashboard.updated_at)}`,
+          "",
+          "### Filter Parameters",
+        ];
+
+        if (dashboard.parameters.length === 0) {
+          lines.push("(none)");
+        } else {
+          lines.push("| Parameter ID | Name | Type | Slug |");
+          lines.push("|-------------|------|------|------|");
+          for (const p of dashboard.parameters) {
+            lines.push(
+              `| ${escapeMd(p.id)} | ${escapeMd(p.name)} | ${escapeMd(p.type)} | ${escapeMd(p.slug)} |`,
+            );
+          }
+        }
+
+        lines.push("");
+        lines.push("### Cards");
+
+        if (dashboard.dashcards.length === 0) {
+          lines.push("(none)");
+        } else {
+          // "Dashcard ID" = placement id; "Card ID" = saved question id (Pitfall 1)
+          lines.push("| Dashcard ID | Card ID | Row | Col | Width | Height |");
+          lines.push("|------------|---------|-----|-----|-------|--------|");
+          for (const dc of dashboard.dashcards) {
+            lines.push(
+              `| ${dc.id} | ${dc.card_id} | ${dc.row} | ${dc.col} | ${dc.size_x} | ${dc.size_y} |`,
+            );
+          }
+        }
+
+        const text = lines.join("\n");
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_get error: ${msg}` }],
         };
       }
     },
