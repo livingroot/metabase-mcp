@@ -144,6 +144,30 @@ export interface MetabaseParameterMapping {
 }
 
 /**
+ * GET /api/dashboard list response item shape.
+ *
+ * Simpler than the full MetabaseDashboard detail shape — list items may not
+ * include the complete dashcards array. Card count must be derived defensively:
+ *   (d.dashcards ?? d.ordered_cards ?? []).length
+ * because Metabase has used both field names across versions (Pitfall 6).
+ *
+ * Both dashcards and ordered_cards are optional because the list endpoint
+ * response shape is not guaranteed to include either field.
+ */
+export interface MetabaseDashboardListItem {
+  id: number;
+  name: string;
+  description: string | null;
+  updated_at: string;
+  created_at: string;
+  archived: boolean;
+  /** Cards placed on this dashboard (may be absent on list items). */
+  dashcards?: MetabaseDashcard[];
+  /** Alternate field name used in some Metabase versions — see Pitfall 6. */
+  ordered_cards?: MetabaseDashcard[];
+}
+
+/**
  * A non-2xx HTTP response from the Metabase API.
  * Thrown by MetabaseClient on failed requests.
  */
