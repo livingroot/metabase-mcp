@@ -999,6 +999,117 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_create (DASH-04)
+  // -------------------------------------------------------------------------
+  // Creates a new empty dashboard and returns the new dashboard ID.
+  // parameters:[] (empty array) is always sent — never parameters:null
+  // (null causes Metabase validation errors — Anti-Pattern).
+  //
+  // T-5-val: name validated with z.string().min(1) — rejects empty/missing name
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+  server.tool(
+    "dashboards_create",
+    "Create a new empty dashboard. Requires a name; description is optional. Returns the new dashboard ID.",
+    {
+      name: z.string().min(1).describe("Display name for the dashboard"),
+      description: z.string().optional().describe("Optional dashboard description"),
+    },
+    async ({ name, description }) => {
+      try {
+        const client = new MetabaseClient({});
+        const created = await client.createDashboard(name, description);
+        return {
+          content: [{ type: "text", text: `Dashboard created successfully. Dashboard ID: ${created.id}` }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_create error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_update (DASH-05)
+  // -------------------------------------------------------------------------
+  // Renames a dashboard or changes its description. Only provided fields are
+  // sent in the PUT body — undefined fields are never sent (T-5-null).
+  //
+  // Note: parameters management is handled by dashboards_add_filter in Plan 03;
+  // this tool covers DASH-05 rename/description only.
+  //
+  // T-5-path: dashboard_id validated with z.number().int().positive() — prevents
+  //           string/path injection into /api/dashboard/:id
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // T-5-null: updateDashboard only sends keys whose value is defined; never null
+  // D-12: per-handler MetabaseClient instantiation
+  server.tool(
+    "dashboards_update",
+    "Rename a dashboard or change its description. Only the provided fields are changed.",
+    {
+      dashboard_id: z.number().int().positive().describe("Dashboard ID to update"),
+      name: z.string().min(1).optional().describe("New display name"),
+      description: z.string().optional().describe("New description"),
+    },
+    async ({ dashboard_id, name, description }) => {
+      try {
+        const client = new MetabaseClient({});
+        await client.updateDashboard(dashboard_id, { name, description });
+        return {
+          content: [{ type: "text", text: "Dashboard updated successfully." }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_update error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_delete (DASH-06)
+  // -------------------------------------------------------------------------
+  // Deletes a dashboard by ID. Uses the v0.59 DELETE /api/dashboard/:id endpoint
+  // (hard delete — dashboard is removed permanently). The soft-delete alternative
+  // PUT /api/dashboard/:id {archived:true} is equally valid for DASH-06 purposes
+  // since archived dashboards are excluded from the default GET /api/dashboard list.
+  //
+  // T-5-path: dashboard_id validated with z.number().int().positive() — prevents
+  //           string/path injection into the DELETE URL path
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+  server.tool(
+    "dashboards_delete",
+    "Delete a dashboard by ID. Permanently removes the dashboard from Metabase.",
+    {
+      dashboard_id: z.number().int().positive().describe("Dashboard ID to delete"),
+    },
+    async ({ dashboard_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        await client.deleteDashboard(dashboard_id);
+        return {
+          content: [{ type: "text", text: "Dashboard deleted successfully." }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_delete error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 

@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard, MetabaseDashboardParameter } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -495,6 +495,110 @@ export class MetabaseClient {
    */
   async getDashboard(dashboardId: number): Promise<MetabaseDashboard> {
     return this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`);
+  }
+
+  /**
+   * Creates a new empty dashboard in Metabase.
+   * Calls POST /api/dashboard with Content-Type: application/json.
+   *
+   * Only name is required. parameters: [] is the correct empty value for the
+   * parameters array — NEVER send parameters: null (null causes validation
+   * errors — Anti-Pattern from 05-RESEARCH.md Pattern 2).
+   *
+   * Only adds description to the body when it is defined (never sends null,
+   * mirroring createCard). Returns the created MetabaseDashboard including its
+   * new id (DASH-04).
+   *
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async createDashboard(name: string, description?: string): Promise<MetabaseDashboard> {
+    const body: Record<string, unknown> = { name, parameters: [] };
+    if (description !== undefined) {
+      body["description"] = description;
+    }
+    return this.request<MetabaseDashboard>("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Updates an existing dashboard with partial changes.
+   * Calls PUT /api/dashboard/:id with Content-Type: application/json.
+   *
+   * Only includes keys whose value is defined in updates — never sends null
+   * to avoid accidentally clearing stored fields (T-5-null — Anti-Pattern).
+   *
+   * The optional parameters branch is used by dashboards_add_filter in Plan 03,
+   * which performs a read-modify-write of the full parameters array. Although
+   * no Plan 02 tool passes parameters, implementing the branch now avoids
+   * Plan 03 having to re-edit this method (DASH-05).
+   *
+   * Returns the updated MetabaseDashboard.
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async updateDashboard(
+    dashboardId: number,
+    updates: { name?: string; description?: string; parameters?: MetabaseDashboardParameter[] },
+  ): Promise<MetabaseDashboard> {
+    const body: Record<string, unknown> = {};
+    if (updates.name !== undefined) {
+      body["name"] = updates.name;
+    }
+    if (updates.description !== undefined) {
+      body["description"] = updates.description;
+    }
+    if (updates.parameters !== undefined) {
+      body["parameters"] = updates.parameters;
+    }
+    return this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * Deletes a dashboard by ID.
+   * Calls DELETE /api/dashboard/:id.
+   *
+   * DELETE returns 204 No Content with no JSON body. This method does NOT use
+   * this.request<T>() because that helper always calls response.json() and would
+   * throw on an empty response body (Pitfall 7 from 05-RESEARCH.md — identical
+   * to deleteCard's established pattern).
+   *
+   * Note: DELETE is the v0.59 hard-delete path. The soft-delete alternative is
+   * PUT /api/dashboard/:id with {archived:true} — archived dashboards are excluded
+   * from the default GET /api/dashboard response and satisfy DASH-06 equally.
+   *
+   * Throws MetabaseApiError on non-2xx responses without including the API key
+   * or raw URL in the message (T-5-02).
+   */
+  async deleteDashboard(dashboardId: number): Promise<void> {
+    const url = `${this.baseUrl}/api/dashboard/${dashboardId}`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        "X-Api-Key": this.apiKey,
+      },
+    });
+
+    if (!response.ok) {
+      // T-5-02: error message must not include apiKey or raw url
+      let text: string;
+      try {
+        text = await response.text();
+      } catch {
+        text = response.statusText;
+      }
+      throw new MetabaseApiError(
+        `Metabase API error ${response.status}: ${text}`,
+        response.status,
+        text,
+      );
+    }
+    // 204 No Content — return void
   }
 
   /**
