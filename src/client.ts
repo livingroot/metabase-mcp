@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -454,6 +454,47 @@ export class MetabaseClient {
       );
     }
     // 204 No Content — return void
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 5: Dashboard methods
+  // -------------------------------------------------------------------------
+
+  /**
+   * Returns the list of dashboards from this Metabase instance.
+   * Calls GET /api/dashboard.
+   *
+   * NOTE: GET /api/dashboard has NO server-side name filter parameter (unlike
+   * GET /api/card which supports ?q=). Client-side .filter() is the only
+   * substring-search approach for dashboard names (A2 from 05-RESEARCH.md).
+   *
+   * When nameFilter is provided, applies a case-insensitive client-side filter.
+   * Returns a bare array — NOT a {data, total} envelope (A1).
+   *
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async listDashboards(nameFilter?: string): Promise<MetabaseDashboardListItem[]> {
+    const result = await this.request<MetabaseDashboardListItem[]>("/api/dashboard");
+    if (nameFilter) {
+      const lower = nameFilter.toLowerCase();
+      return result.filter((d) => d.name.toLowerCase().includes(lower));
+    }
+    return result;
+  }
+
+  /**
+   * Returns the full dashboard including filter parameters and all placed cards.
+   * Calls GET /api/dashboard/:id.
+   *
+   * Returns MetabaseDashboard with parameters[] and dashcards[] (DASH-03).
+   * This method is reused by the read-modify-write tools in Plan 03:
+   * dashboards_update_card, dashboards_add_filter, and dashboards_connect_filter
+   * all call getDashboard() first to fetch current state before mutating.
+   *
+   * Throws MetabaseApiError on non-2xx responses.
+   */
+  async getDashboard(dashboardId: number): Promise<MetabaseDashboard> {
+    return this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`);
   }
 
   /**

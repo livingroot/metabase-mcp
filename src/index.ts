@@ -872,6 +872,56 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_list (DASH-01, DASH-02)
+  // -------------------------------------------------------------------------
+  // Lists dashboards with optional name substring filter (client-side only —
+  // GET /api/dashboard has no ?q= param unlike GET /api/card).
+  // Returns a Markdown table with ID, name, description, card count, updated date.
+  //
+  // Card count computed defensively: (d.dashcards ?? d.ordered_cards ?? []).length
+  // (Pitfall 6 — list items may carry dashcards OR ordered_cards or neither).
+  //
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // T-5-05: escapeMd() applied to all name/description cells
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.tool(
+    "dashboards_list",
+    "List dashboards. Optionally filter by name substring. Returns ID, name, description, card count, and last-updated date as a Markdown table.",
+    {
+      name_filter: z
+        .string()
+        .optional()
+        .describe("Optional case-insensitive substring to filter dashboard names"),
+    },
+    async ({ name_filter }) => {
+      try {
+        const client = new MetabaseClient({});
+        const dashboards = await client.listDashboards(name_filter);
+        const header =
+          "| ID | Name | Description | Cards | Updated |\n" +
+          "|----|------|-------------|-------|---------|";
+        const rows = dashboards
+          .map((d) => {
+            // Pitfall 6: list items may carry dashcards OR ordered_cards or neither
+            const cards = (d.dashcards ?? d.ordered_cards ?? []).length;
+            return `| ${d.id} | ${escapeMd(d.name)} | ${escapeMd(d.description ?? "—")} | ${cards} | ${escapeMd(d.updated_at)} |`;
+          })
+          .join("\n");
+        const text = rows.length > 0 ? `${header}\n${rows}` : header;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_list error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 
