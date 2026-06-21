@@ -1202,6 +1202,77 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_update_card (DASH-09)
+  // -------------------------------------------------------------------------
+  // Repositions or resizes a single card on a dashboard by its dashcard placement
+  // ID. Other cards on the dashboard are preserved (read-modify-write pattern).
+  //
+  // Read-modify-write (Pitfall 2):
+  //   1. GET /api/dashboard/:id — fetch current dashcards array
+  //   2. Modify the target dashcard's position fields
+  //   3. PUT /api/dashboard/:id/cards — send ALL dashcards (omitting one removes it)
+  //
+  // T-5-path: dashboard_id / dashcard_id validated with z.number().int().positive()
+  // T-5-rmw: preservation test asserts PUT body.cards includes all existing dashcards
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+  server.tool(
+    "dashboards_update_card",
+    "Reposition or resize a card on a dashboard. Identified by its dashcard placement ID. Other cards on the dashboard are preserved.",
+    {
+      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+      dashcard_id: z.number().int().positive().describe("Dashcard placement ID to reposition/resize (NOT the card_id)"),
+      row: z.number().int().min(0).optional().describe("New row position"),
+      col: z.number().int().min(0).optional().describe("New column position"),
+      size_x: z.number().int().min(1).max(24).optional().describe("New width in grid units"),
+      size_y: z.number().int().min(1).optional().describe("New height in grid units"),
+    },
+    async ({ dashboard_id, dashcard_id, row, col, size_x, size_y }) => {
+      try {
+        const client = new MetabaseClient({});
+        // Step 1: fetch current dashboard state (read-modify-write — Pitfall 2)
+        const dashboard = await client.getDashboard(dashboard_id);
+        // Step 2: locate the target dashcard
+        const target = dashboard.dashcards.find((dc) => dc.id === dashcard_id);
+        if (!target) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `dashboards_update_card error: dashcard ${dashcard_id} not found on dashboard ${dashboard_id}`,
+              },
+            ],
+          };
+        }
+        // Step 3: build the FULL cards array — every dashcard must be included
+        // (omitting any dashcard removes it from the dashboard — Pitfall 2)
+        const fullCardsArray = dashboard.dashcards.map((dc) => ({
+          id: dc.id,
+          card_id: dc.card_id,
+          row: dc.id === dashcard_id ? (row ?? dc.row) : dc.row,
+          col: dc.id === dashcard_id ? (col ?? dc.col) : dc.col,
+          size_x: dc.id === dashcard_id ? (size_x ?? dc.size_x) : dc.size_x,
+          size_y: dc.id === dashcard_id ? (size_y ?? dc.size_y) : dc.size_y,
+          parameter_mappings: dc.parameter_mappings ?? [],
+        }));
+        // Step 4: PUT full replacement
+        await client.updateDashboardCards(dashboard_id, fullCardsArray);
+        return {
+          content: [{ type: "text", text: "Card repositioned." }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_update_card error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 
