@@ -1110,6 +1110,98 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_add_card (DASH-07)
+  // -------------------------------------------------------------------------
+  // Adds an existing saved question (card) to a dashboard at an optional grid
+  // position. Returns the dashcard placement ID — agents must store this value;
+  // it is required for remove/reposition/connect-filter operations and is
+  // distinct from the saved question's card_id (Pitfall 1 — two-tier IDs).
+  //
+  // Under the hood: POST /api/dashboard/:id/cards with camelCase cardId in body
+  // (Pitfall 3), then PUT /api/dashboard/:id/cards to set the grid position.
+  //
+  // T-5-path: dashboard_id / card_id validated with z.number().int().positive()
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+  server.tool(
+    "dashboards_add_card",
+    'Add an existing saved question to a dashboard at an optional grid position. Returns the dashcard ID — capture it; it is the placement ID needed for remove/reposition/filter-connect operations (it is NOT the card ID).',
+    {
+      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+      card_id: z.number().int().positive().describe("Saved question (card) ID to place"),
+      row: z.number().int().min(0).optional().describe("Row position, 0-indexed (default 0)"),
+      col: z.number().int().min(0).optional().describe("Column position, 0-indexed (default 0)"),
+      size_x: z.number().int().min(1).max(24).optional().describe("Width in grid units (default 12)"),
+      size_y: z.number().int().min(1).optional().describe("Height in grid units (default 8)"),
+    },
+    async ({ dashboard_id, card_id, row, col, size_x, size_y }) => {
+      try {
+        const client = new MetabaseClient({});
+        const dashcard = await client.addDashboardCard(dashboard_id, card_id, {
+          row: row ?? 0,
+          col: col ?? 0,
+          size_x: size_x ?? 12,
+          size_y: size_y ?? 8,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Card added to dashboard. Dashcard ID: ${dashcard.id} (use this dashcard_id — not the card_id — for remove/reposition/connect-filter).`,
+            },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_add_card error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Tool: dashboards_remove_card (DASH-08)
+  // -------------------------------------------------------------------------
+  // Removes a single card from a dashboard using its dashcard placement ID
+  // (the id returned by dashboards_add_card or shown by dashboards_get).
+  //
+  // IMPORTANT: dashcard_id is the placement id, NOT the saved question's card_id
+  // (Pitfall 1 — two-tier IDs). Using card_id here will 404 or remove the wrong card.
+  //
+  // Under the hood: DELETE /api/dashboard/:id/cards?dashcardId=<dashcard_id>
+  //
+  // T-5-path: dashboard_id / dashcard_id validated with z.number().int().positive()
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+  server.tool(
+    "dashboards_remove_card",
+    "Remove a single card from a dashboard using its dashcard placement ID (the ID returned by dashboards_add_card or shown in dashboards_get — NOT the card ID).",
+    {
+      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+      dashcard_id: z.number().int().positive().describe("Dashcard placement ID to remove (NOT the card_id)"),
+    },
+    async ({ dashboard_id, dashcard_id }) => {
+      try {
+        const client = new MetabaseClient({});
+        await client.removeDashboardCard(dashboard_id, dashcard_id);
+        return {
+          content: [{ type: "text", text: "Card removed from dashboard." }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // T-5-02: never echo METABASE_API_KEY or raw request URL
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_remove_card error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 
