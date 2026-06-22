@@ -1273,6 +1273,183 @@ export function createServer(): McpServer {
     },
   );
 
+  // Tool: dashboards_add_filter (DASH-10)
+  server.tool(
+    "dashboards_add_filter",
+    "Add a filter parameter to a dashboard. Provide a unique parameter_id string; reuse the same parameter_id in dashboards_connect_filter to wire it to a card.",
+    {
+      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+      parameter_id: z
+        .string()
+        .min(1)
+        .describe(
+          "Unique string ID for this parameter (reuse it verbatim in dashboards_connect_filter)",
+        ),
+      name: z.string().min(1).describe("Display name for the filter, e.g. 'Status'"),
+      type: z
+        .enum([
+          "category",
+          "id",
+          "date/single",
+          "date/range",
+          "date/relative",
+          "date/month-year",
+          "date/quarter-year",
+          "date/all-options",
+          "number/=",
+          "number/!=",
+          "number/between",
+          "number/>=",
+          "number/<=",
+          "string/=",
+          "string/!=",
+          "string/contains",
+          "string/does-not-contain",
+          "string/starts-with",
+          "string/ends-with",
+          "location/city",
+          "location/state",
+          "location/zip_code",
+          "location/country",
+        ])
+        .describe("Filter type"),
+    },
+    async ({ dashboard_id, parameter_id, name, type }) => {
+      try {
+        const client = new MetabaseClient({});
+        // Step 1: fetch current dashboard state (read-modify-write pattern)
+        const dashboard = await client.getDashboard(dashboard_id);
+        // Step 2: build the new parameter
+        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+        const newParam = { id: parameter_id, name, type, slug };
+        // Step 3: PUT with existing parameters preserved + new parameter appended
+        await client.updateDashboard(dashboard_id, {
+          parameters: [...dashboard.parameters, newParam],
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Filter '${name}' added (parameter_id=${parameter_id}). Use dashboards_connect_filter with this parameter_id to wire it to a card.`,
+            },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_add_filter error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // Tool: dashboards_connect_filter (DASH-11)
+  server.tool(
+    "dashboards_connect_filter",
+    "Wire a dashboard filter parameter to a native SQL card's template tag so the filter affects that card's results. The parameter_id must match one added via dashboards_add_filter; tag_name is the {{tag_name}} variable in the card's SQL.",
+    {
+      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+      dashcard_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("Dashcard placement ID of the card to wire (NOT the card_id)"),
+      parameter_id: z
+        .string()
+        .min(1)
+        .describe(
+          "The dashboard parameter_id to connect (must match one from dashboards_add_filter)",
+        ),
+      tag_name: z
+        .string()
+        .min(1)
+        .describe(
+          "The SQL template-tag variable name (the {{tag_name}} in the card's native SQL)",
+        ),
+    },
+    async ({ dashboard_id, dashcard_id, parameter_id, tag_name }) => {
+      try {
+        const client = new MetabaseClient({});
+        // Step 1: fetch current dashboard state (read-modify-write pattern)
+        const dashboard = await client.getDashboard(dashboard_id);
+        // Step 2: verify the parameter_id exists (Pitfall 4 — fail loudly instead of silent no-op)
+        if (!dashboard.parameters.some((p) => p.id === parameter_id)) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `dashboards_connect_filter error: parameter_id '${parameter_id}' not found on dashboard ${dashboard_id} — add it first with dashboards_add_filter`,
+              },
+            ],
+          };
+        }
+        // Step 3: locate the target dashcard
+        const target = dashboard.dashcards.find((dc) => dc.id === dashcard_id);
+        if (!target) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `dashboards_connect_filter error: dashcard ${dashcard_id} not found on dashboard ${dashboard_id}`,
+              },
+            ],
+          };
+        }
+        // Step 4: build the FULL cards array preserving ALL dashcards (Pitfall 2)
+        const fullCardsArray = dashboard.dashcards.map((dc) => {
+          if (dc.id === dashcard_id) {
+            // Add the new parameter_mapping to this dashcard (native SQL target format — Pitfall 5)
+            return {
+              id: dc.id,
+              card_id: dc.card_id,
+              row: dc.row,
+              col: dc.col,
+              size_x: dc.size_x,
+              size_y: dc.size_y,
+              parameter_mappings: [
+                ...(target.parameter_mappings ?? []),
+                {
+                  parameter_id,
+                  card_id: target.card_id,
+                  target: ["variable", ["template-tag", tag_name]],
+                },
+              ],
+            };
+          }
+          // Preserve every other dashcard with its existing parameter_mappings
+          return {
+            id: dc.id,
+            card_id: dc.card_id,
+            row: dc.row,
+            col: dc.col,
+            size_x: dc.size_x,
+            size_y: dc.size_y,
+            parameter_mappings: dc.parameter_mappings ?? [],
+          };
+        });
+        // Step 5: PUT the full cards array
+        await client.updateDashboardCards(dashboard_id, fullCardsArray);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Filter '${parameter_id}' connected to dashcard ${dashcard_id} via template tag '${tag_name}'.`,
+            },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_connect_filter error: ${msg}` }],
+        };
+      }
+    },
+  );
+
   return server;
 }
 
