@@ -110,8 +110,8 @@ describe.runIf(process.env.INTEGRATION)("Cold-start scenario", () => {
     });
     expect(res.isError).toBeFalsy();
     const text = (res.content[0] as { text: string }).text;
-    // The column header row must contain our alias
-    expect(text).toContain("test_col");
+    // H2 uppercases column aliases; match case-insensitively
+    expect(text.toLowerCase()).toContain("test_col");
   });
 
   // -------------------------------------------------------------------------
@@ -145,8 +145,8 @@ describe.runIf(process.env.INTEGRATION)("Cold-start scenario", () => {
     });
     expect(res.isError).toBeFalsy();
     const text = (res.content[0] as { text: string }).text;
-    // Column alias "n" must appear in the result table
-    expect(text).toContain("n");
+    // H2 uppercases column aliases; match case-insensitively
+    expect(text.toLowerCase()).toContain("n");
   });
 
   // -------------------------------------------------------------------------

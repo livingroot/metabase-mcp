@@ -700,9 +700,20 @@ export function createServer(): McpServer {
           "",
         ];
 
-        // SQL extraction — guard for MBQL cards (Pitfall 4)
-        if (card.dataset_query.type === "native") {
-          const sql = card.dataset_query.native?.query ?? "(empty)";
+        // SQL extraction — support both legacy format (dataset_query.type === "native")
+        // and Metabase v0.59+ pMBQL format (stages[i]["lib/type"] === "mbql.stage/native")
+        const nativeStage = card.dataset_query.stages?.find(
+          (s) => s["lib/type"] === "mbql.stage/native",
+        );
+        const isNative =
+          card.dataset_query.type === "native" || nativeStage !== undefined;
+
+        if (isNative) {
+          // v0.59+ pMBQL: SQL is stages[i].native (string); legacy: native.query
+          const sql =
+            nativeStage?.native ??
+            card.dataset_query.native?.query ??
+            "(empty)";
           // Escape triple-backtick sequences so they cannot break the fenced block
           const safeSql = sql.replace(/```/g, "\\`\\`\\`");
           lines.push("**Query (SQL):**");
@@ -710,8 +721,9 @@ export function createServer(): McpServer {
           lines.push(safeSql);
           lines.push("```");
         } else {
+          const queryType = card.dataset_query.type ?? card.dataset_query["lib/type"] ?? "unknown";
           lines.push(
-            `(Non-native card — dataset_query type: ${escapeMd(card.dataset_query.type)}. SQL not available; this server creates only native SQL cards.)`,
+            `(Non-native card — dataset_query type: ${escapeMd(queryType)}. SQL not available; this server creates only native SQL cards.)`,
           );
         }
 

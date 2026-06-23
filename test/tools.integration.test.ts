@@ -212,7 +212,8 @@ describe.runIf(process.env.INTEGRATION)("Tool coverage", () => {
       });
       expect(res.isError).toBeFalsy();
       const text = (res.content[0] as { text: string }).text;
-      expect(text).toContain("val");
+      // H2 uppercases column aliases; match case-insensitively
+      expect(text.toLowerCase()).toContain("val");
     });
 
     it("queries_execute_sql — max_rows truncation cap notice (QUERY-02)", async () => {
@@ -252,8 +253,8 @@ describe.runIf(process.env.INTEGRATION)("Tool coverage", () => {
       });
       expect(res.isError).toBeFalsy();
       const text = (res.content[0] as { text: string }).text;
-      // CSV export always has a comma-separated header line
-      expect(text).toContain("export_col");
+      // H2 uppercases column aliases in CSV too; match case-insensitively
+      expect(text.toLowerCase()).toContain("export_col");
     });
 
     it("queries_execute_sql — parameterized query with {{tag}} (QUERY-05)", async () => {
@@ -358,7 +359,8 @@ describe.runIf(process.env.INTEGRATION)("Tool coverage", () => {
       });
       expect(res.isError).toBeFalsy();
       const text = (res.content[0] as { text: string }).text;
-      expect(text).toContain("sweep_col");
+      // H2 uppercases column aliases in result tables; match case-insensitively
+      expect(text.toLowerCase()).toContain("sweep_col");
     });
 
     it("cards_update — renames the card; cards_get confirms new name (CARDS-05)", async () => {

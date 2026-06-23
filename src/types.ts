@@ -75,19 +75,31 @@ export interface MetabaseCardListItem {
  * Extends MetabaseCardListItem with the full query definition, visualization
  * settings, and result metadata. Used by card CRUD tools in Phase 4.
  *
- * dataset_query.type distinguishes native SQL ("native") from MBQL GUI-built
- * questions ("query"). The native sub-shape is only present when type === "native".
- * Use the hyphenated "template-tags" key — not "template_tags" (Pitfall 2).
+ * Metabase v0.59+ switched to pMBQL: dataset_query no longer has a top-level
+ * "type" field; instead, stages[i]["lib/type"] === "mbql.stage/native" marks a
+ * native SQL card, and stages[i].native is the SQL string (not an object).
+ * Legacy format (< v0.59) uses dataset_query.type === "native" and
+ * dataset_query.native.query. Both shapes are represented here.
  */
 export interface MetabaseCard extends MetabaseCardListItem {
+  type?: string;                       // v0.59+: "question" | "model" (top-level)
   dataset_query: {
-    type: string;                      // "native" | "query"
+    // Legacy format (< v0.59)
+    type?: string;                     // "native" | "query"
+    // v0.59+ pMBQL format
+    "lib/type"?: string;               // "mbql/query"
     database: number;
+    // Legacy native sub-object
     native?: {
-      query: string;                   // the SQL (only present when type === "native")
+      query: string;
       "template-tags": Record<string, unknown>;
     };
-    query?: Record<string, unknown>;   // MBQL query (only present when type === "query")
+    query?: Record<string, unknown>;
+    // v0.59+ stages array — each stage has lib/type and (for native) a string native field
+    stages?: Array<{
+      "lib/type": string;              // "mbql.stage/native" | "mbql.stage/mbql"
+      native?: string;                 // SQL string (v0.59+ native stage only)
+    }>;
   };
   visualization_settings: Record<string, unknown>;
   result_metadata: unknown[] | null;

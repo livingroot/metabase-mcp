@@ -654,18 +654,19 @@ export class MetabaseClient {
 
   /**
    * Adds an existing saved question to a dashboard.
-   * Calls POST /api/dashboard/:id/cards with Content-Type: application/json.
    *
-   * IMPORTANT — the POST body uses camelCase `cardId`, NOT snake_case `card_id`.
-   * This is an intentional inconsistency in the Metabase API (Pitfall 3).
-   * The PUT /api/dashboard/:id/cards body uses snake_case `card_id`.
+   * Metabase v0.59 removed POST /api/dashboard/:id/cards. The only write path
+   * is now PUT /api/dashboard/:id/cards with the FULL replacement array. This
+   * method:
+   *   1. GETs the current dashboard to collect existing dashcards.
+   *   2. PUTs all existing cards + the new card (id: -1 is the placeholder for
+   *      a new dashcard that the server will assign a real ID to).
+   *   3. Finds the new dashcard in the response by its absence from the pre-PUT
+   *      ID set.
    *
    * Returns the created MetabaseDashcard which contains the dashcard placement
    * `id` — this is different from the saved question's `card_id` (Pitfall 1).
    * The dashcard `id` is required for remove/reposition/filter-connect operations.
-   *
-   * When `position` is provided, a second PUT request sets the grid placement.
-   * The original dashcard (with its placement `id`) is returned regardless.
    *
    * Throws MetabaseApiError on non-2xx responses.
    */
@@ -674,74 +675,79 @@ export class MetabaseClient {
     cardId: number,
     position?: { row: number; col: number; size_x: number; size_y: number },
   ): Promise<MetabaseDashcard> {
-    const dashcard = await this.request<MetabaseDashcard>(
+    const dashboard = await this.getDashboard(dashboardId);
+    const existingIds = new Set(dashboard.dashcards.map((dc) => dc.id));
+
+    const row = position?.row ?? 0;
+    const col = position?.col ?? 0;
+    const size_x = position?.size_x ?? 4;
+    const size_y = position?.size_y ?? 4;
+
+    const allCards = [
+      ...dashboard.dashcards.map((dc) => ({
+        id: dc.id,
+        card_id: dc.card_id,
+        row: dc.row,
+        col: dc.col,
+        size_x: dc.size_x,
+        size_y: dc.size_y,
+        parameter_mappings: dc.parameter_mappings,
+        visualization_settings: {},
+        series: [],
+        dashboard_tab_id: null,
+        action_id: null,
+      })),
+      {
+        id: -1,
+        card_id: cardId,
+        row,
+        col,
+        size_x,
+        size_y,
+        parameter_mappings: [],
+        visualization_settings: {},
+        series: [],
+        dashboard_tab_id: null,
+        action_id: null,
+      },
+    ];
+
+    const response = await this.request<{ cards: MetabaseDashcard[] }>(
       `/api/dashboard/${dashboardId}/cards`,
       {
-        method: "POST",
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        // POST body uses camelCase cardId (NOT snake_case card_id) — Pitfall 3
-        body: JSON.stringify({
-          cardId,
-          parameter_mappings: [],
-          series: [],
-        }),
+        body: JSON.stringify({ cards: allCards, ordered_tabs: [] }),
       },
     );
-    // If position specified, set grid placement via a second PUT request
-    if (position) {
-      await this.updateDashboardCards(dashboardId, [
-        {
-          id: dashcard.id,
-          card_id: dashcard.card_id,
-          row: position.row,
-          col: position.col,
-          size_x: position.size_x,
-          size_y: position.size_y,
-          parameter_mappings: dashcard.parameter_mappings ?? [],
-        },
-      ]);
+
+    // The new dashcard has a positive server-assigned ID not present before PUT
+    const newDashcard = response.cards.find((dc) => !existingIds.has(dc.id));
+    if (!newDashcard) {
+      throw new Error(
+        `dashboards_add_card: new dashcard for card_id=${cardId} not found in PUT response`,
+      );
     }
-    return dashcard;
+    return newDashcard;
   }
 
   /**
    * Removes a single card from a dashboard by its dashcard placement ID.
-   * Calls DELETE /api/dashboard/:id/cards?dashcardId=<dashcardId>.
    *
-   * The `dashcardId` query parameter is the dashcard placement `id` returned
-   * by addDashboardCard — NOT the saved question's `card_id` (Pitfall 1).
+   * Metabase v0.59 removed DELETE /api/dashboard/:id/cards?dashcardId=. The
+   * only write path is PUT /api/dashboard/:id/cards with a full replacement
+   * array. Omitting a dashcard from the array removes it (Pitfall 2). This
+   * method:
+   *   1. GETs the current dashboard to collect existing dashcards.
+   *   2. Filters out the target dashcard by its placement ID.
+   *   3. PUTs the remaining dashcards as the new full set.
    *
-   * DELETE /api/dashboard/:id/cards returns 204 No Content. This method does
-   * NOT use this.request<T>() because that helper calls response.json() and
-   * would throw on an empty response body (Pitfall 7).
-   *
-   * Throws MetabaseApiError on non-2xx responses without including the API key
-   * or raw URL in the message (T-5-02).
+   * Throws MetabaseApiError on non-2xx responses.
    */
   async removeDashboardCard(dashboardId: number, dashcardId: number): Promise<void> {
-    const url = `${this.baseUrl}/api/dashboard/${dashboardId}/cards?dashcardId=${dashcardId}`;
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: {
-        "X-Api-Key": this.apiKey,
-      },
-    });
-
-    if (!response.ok) {
-      // T-5-02: error message must not include apiKey or raw url
-      let text: string;
-      try {
-        text = await response.text();
-      } catch {
-        text = response.statusText;
-      }
-      throw new MetabaseApiError(
-        `Metabase API error ${response.status}: ${text}`,
-        response.status,
-        text,
-      );
-    }
-    // 204 No Content — return void
+    const dashboard = await this.getDashboard(dashboardId);
+    const remaining = dashboard.dashcards.filter((dc) => dc.id !== dashcardId);
+    await this.updateDashboardCards(dashboardId, remaining);
   }
 
   /**

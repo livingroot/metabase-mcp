@@ -471,11 +471,14 @@ describe("MCP dashboard tools", () => {
   // -------------------------------------------------------------------------
 
   describe("dashboards_add_card", () => {
-    it("calls POST /api/dashboard/:id/cards with camelCase cardId (NOT card_id) in body", async () => {
-      // Two sequential calls: POST (add card) then PUT (set position)
+    it("issues GET to fetch current dashcards then PUT to /api/dashboard/:id/cards with new card", async () => {
+      // v0.59: POST /api/dashboard/:id/cards removed; implementation now does GET+PUT
+      // Call 1: GET /api/dashboard/1 (fetch current state)
+      // Call 2: PUT /api/dashboard/1/cards (full replacement with new card appended)
+      const putResponse = { cards: [...SEED_DASHBOARD_DETAIL.dashcards, SEED_DASHCARD_ADDED] };
       const mockFetch = makeSequentialFetchMock([
-        [200, SEED_DASHCARD_ADDED],
-        [200, {}],
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, putResponse],
       ]);
       vi.stubGlobal("fetch", mockFetch);
 
@@ -485,20 +488,26 @@ describe("MCP dashboard tools", () => {
       });
 
       const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
-      expect(calls.length).toBeGreaterThanOrEqual(1);
-      const url = calls[0][0] as string;
-      expect(url).toMatch(/\/api\/dashboard\/1\/cards$/);
-      const init = calls[0][1] as RequestInit;
-      expect(init.method).toBe("POST");
-      const body = JSON.parse(init.body as string) as Record<string, unknown>;
-      // Must use camelCase cardId (NOT snake_case card_id) — Pitfall 3
-      expect(body["cardId"]).toBe(101);
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      // First call: GET to fetch current dashboard state
+      const getUrl = calls[0][0] as string;
+      expect(getUrl).toMatch(/\/api\/dashboard\/1$/);
+      // Second call: PUT with full cards array including new card (id: -1)
+      const putUrl = calls[1][0] as string;
+      expect(putUrl).toMatch(/\/api\/dashboard\/1\/cards$/);
+      const putInit = calls[1][1] as RequestInit;
+      expect(putInit.method).toBe("PUT");
+      const putBody = JSON.parse(putInit.body as string) as { cards: unknown[] };
+      const newCard = putBody.cards.find((c: unknown) => (c as Record<string, unknown>)["id"] === -1) as Record<string, unknown>;
+      expect(newCard).toBeTruthy();
+      expect(newCard["card_id"]).toBe(101);
     });
 
-    it("response text includes the dashcard id (99) returned by the POST", async () => {
+    it("response text includes the dashcard id (99) returned by the PUT", async () => {
+      const putResponse = { cards: [...SEED_DASHBOARD_DETAIL.dashcards, SEED_DASHCARD_ADDED] };
       const mockFetch = makeSequentialFetchMock([
-        [200, SEED_DASHCARD_ADDED],
-        [200, {}],
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, putResponse],
       ]);
       vi.stubGlobal("fetch", mockFetch);
 
@@ -518,42 +527,44 @@ describe("MCP dashboard tools", () => {
   // -------------------------------------------------------------------------
 
   describe("dashboards_remove_card", () => {
-    it("calls DELETE to /api/dashboard/1/cards with dashcardId=99 in query string", async () => {
-      const mockFetch = vi.fn().mockResolvedValueOnce({
-        ok: true,
-        status: 204,
-        statusText: "No Content",
-        json: () => Promise.resolve(null),
-        text: () => Promise.resolve(""),
-      } as unknown as Response);
+    it("issues GET to fetch current dashcards then PUT to /api/dashboard/:id/cards with target omitted", async () => {
+      // v0.59: DELETE /api/dashboard/:id/cards?dashcardId= removed; implementation does GET+PUT
+      // Omitting a dashcard from the PUT array removes it (Pitfall 2)
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],  // GET: fetch current state
+        [200, { cards: [SEED_DASHBOARD_DETAIL.dashcards[1]] }],  // PUT: returns remaining
+      ]);
       vi.stubGlobal("fetch", mockFetch);
 
       await client.callTool({
         name: "dashboards_remove_card",
-        arguments: { dashboard_id: 1, dashcard_id: 99 },
+        arguments: { dashboard_id: 1, dashcard_id: 11 },
       });
 
       const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
-      expect(calls.length).toBeGreaterThanOrEqual(1);
-      const url = calls[0][0] as string;
-      expect(url).toMatch(/\/api\/dashboard\/1\/cards\?dashcardId=99/);
-      const init = calls[0][1] as RequestInit;
-      expect(init.method).toBe("DELETE");
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      const getUrl = calls[0][0] as string;
+      expect(getUrl).toMatch(/\/api\/dashboard\/1$/);
+      const putUrl = calls[1][0] as string;
+      expect(putUrl).toMatch(/\/api\/dashboard\/1\/cards$/);
+      const putInit = calls[1][1] as RequestInit;
+      expect(putInit.method).toBe("PUT");
+      // dashcard 11 must NOT appear in the PUT body (it was removed)
+      const putBody = JSON.parse(putInit.body as string) as { cards: unknown[] };
+      const hasRemoved = putBody.cards.some((c: unknown) => (c as Record<string, unknown>)["id"] === 11);
+      expect(hasRemoved).toBe(false);
     });
 
     it("returns a confirmation message containing 'removed'", async () => {
-      const mockFetch = vi.fn().mockResolvedValueOnce({
-        ok: true,
-        status: 204,
-        statusText: "No Content",
-        json: () => Promise.resolve(null),
-        text: () => Promise.resolve(""),
-      } as unknown as Response);
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, { cards: [SEED_DASHBOARD_DETAIL.dashcards[1]] }],
+      ]);
       vi.stubGlobal("fetch", mockFetch);
 
       const res = await client.callTool({
         name: "dashboards_remove_card",
-        arguments: { dashboard_id: 1, dashcard_id: 99 },
+        arguments: { dashboard_id: 1, dashcard_id: 11 },
       });
 
       expect(res.isError).toBeFalsy();
