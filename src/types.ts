@@ -99,6 +99,7 @@ export interface MetabaseCard extends MetabaseCardListItem {
     stages?: Array<{
       "lib/type": string;              // "mbql.stage/native" | "mbql.stage/mbql"
       native?: string;                 // SQL string (v0.59+ native stage only)
+      "template-tags"?: Record<string, unknown>; // Template tag configs (v0.59+ pMBQL native stage)
     }>;
   };
   visualization_settings: Record<string, unknown>;

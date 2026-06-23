@@ -1,6 +1,6 @@
 # Metabase MCP Server
 
-Complietly vibecoded a TypeScript/Node.js MCP (Model Context Protocol) server that wraps the Metabase REST API, giving AI agents (Claude Desktop, Claude Code) full programmatic access to a Metabase v0.59.x instance. Agents can execute queries, explore schemas, and build dashboards entirely through structured tool calls — no human click-through required.
+**Complietly vibecoded** a TypeScript/Node.js MCP (Model Context Protocol) server that wraps the Metabase REST API, giving AI agents (Claude Desktop, Claude Code) full programmatic access to a Metabase v0.59.x instance. Agents can execute queries, explore schemas, and build dashboards entirely through structured tool calls — no human click-through required.
 
 ## Prerequisites
 

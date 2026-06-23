@@ -875,7 +875,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "cards_update",
     {
-      description: "Update a saved question's name, description, or SQL. Only the provided fields are changed. Requires database_id when updating sql.",
+      description: "Update a saved question's name, description, or SQL. Only the provided fields are changed. Requires database_id when updating sql. Pass ref_card_id to copy template-tag types from another card (fixes broken filter types).",
       inputSchema: {
         card_id: z
           .number()
@@ -891,9 +891,15 @@ export function createServer(): McpServer {
           .positive()
           .optional()
           .describe("Required when updating sql — the database the SQL runs against"),
+        ref_card_id: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Card ID to copy template-tag types from. Use this to restore broken filter types by providing a reference card with correct types."),
       },
     },
-    async ({ card_id, name, description, sql, database_id }) => {
+    async ({ card_id, name, description, sql, database_id, ref_card_id }) => {
       // Pitfall 3: dataset_query.database is mandatory when changing SQL
       if (sql !== undefined && database_id === undefined) {
         return {
@@ -908,7 +914,7 @@ export function createServer(): McpServer {
       }
       try {
         const client = new MetabaseClient({});
-        await client.updateCard(card_id, { name, description, sql, databaseId: database_id });
+        await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id });
         return {
           content: [{ type: "text", text: "Card updated successfully." }],
         };

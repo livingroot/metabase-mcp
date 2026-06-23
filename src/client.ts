@@ -50,9 +50,11 @@ export class MetabaseApiError extends Error {
 function buildTemplateTags(sql: string): Record<string, unknown> {
   const tags: Record<string, unknown> = {};
   const seen = new Set<string>();
-  for (const [, name] of sql.matchAll(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g)) {
+  for (const [, name] of sql.matchAll(/\{\{\s*([^\s}]+)\s*\}\}/g)) {
     if (seen.has(name)) continue;
     seen.add(name);
+    // Skip card/model references ({{#id-slug}}) — these need the source card's tag definition
+    if (name.startsWith("#")) continue;
     tags[name] = {
       id: name,
       name,
@@ -412,6 +414,7 @@ export class MetabaseClient {
       description?: string;
       sql?: string;
       databaseId?: number;
+      refCardId?: number;
     },
   ): Promise<MetabaseCard> {
     const body: Record<string, unknown> = {};
@@ -425,24 +428,65 @@ export class MetabaseClient {
       if (updates.databaseId === undefined) {
         throw new Error("updateCard: databaseId is required when updating sql");
       }
-      // Fetch current card to preserve existing tag configs (type, display-name, etc.)
-      // for tags that remain in the new SQL. Tags removed from SQL are dropped.
-      const current = await this.getCard(cardId);
-      const existingTags = (current.dataset_query.native?.["template-tags"] ?? {}) as Record<string, unknown>;
+      // When refCardId is provided, copy template-tags AND format from that card.
+      // Otherwise fetch the card's own dataset_query to preserve format and tags.
+      const sourceCardId = updates.refCardId ?? cardId;
+      const sourceCard = await this.getCard(sourceCardId);
+
+      // Detect pMBQL (v0.59+) vs legacy native format
+      const nativeStageIdx = sourceCard.dataset_query.stages?.findIndex(
+        (s) => s["lib/type"] === "mbql.stage/native",
+      ) ?? -1;
+      const nativeStage = nativeStageIdx >= 0
+        ? sourceCard.dataset_query.stages![nativeStageIdx]
+        : undefined;
+
+      const sourceTags = (
+        nativeStage?.["template-tags"] ??
+        sourceCard.dataset_query.native?.["template-tags"] ??
+        {}
+      ) as Record<string, unknown>;
+
+      // Merge template-tags: prefer source card config over generated text defaults
       const newTags = buildTemplateTags(updates.sql);
-      // For each tag in the new SQL, prefer the existing config over the generated default
       const mergedTags: Record<string, unknown> = {};
       for (const name of Object.keys(newTags)) {
-        mergedTags[name] = existingTags[name] ?? newTags[name];
+        mergedTags[name] = sourceTags[name] ?? newTags[name];
       }
-      body["dataset_query"] = {
-        database: updates.databaseId,
-        type: "native",
-        native: {
-          query: updates.sql,
+      // Also carry card/model reference tags ({{#id-slug}}) from source
+      for (const [, refName] of updates.sql.matchAll(/\{\{\s*(#[^\s}]+)\s*\}\}/g)) {
+        if (sourceTags[refName] !== undefined) {
+          mergedTags[refName] = sourceTags[refName];
+        }
+      }
+
+      // Build dataset_query in the SAME FORMAT as the source card so Metabase
+      // does not silently discard the update (v0.59 rejects legacy format for
+      // cards that were stored in pMBQL format, returning 200 but saving {}).
+      if (nativeStage !== undefined && sourceCard.dataset_query.stages) {
+        // pMBQL format: clone stages array, replace the native stage
+        const stages = [...sourceCard.dataset_query.stages];
+        stages[nativeStageIdx] = {
+          ...nativeStage,
+          native: updates.sql,
           "template-tags": mergedTags,
-        },
-      };
+        };
+        body["dataset_query"] = {
+          ...sourceCard.dataset_query,
+          database: updates.databaseId,
+          stages,
+        };
+      } else {
+        // Legacy native format (or source card dataset_query is {} — fall back to legacy)
+        body["dataset_query"] = {
+          database: updates.databaseId,
+          type: "native",
+          native: {
+            query: updates.sql,
+            "template-tags": mergedTags,
+          },
+        };
+      }
     }
     return this.request<MetabaseCard>(`/api/card/${cardId}`, {
       method: "PUT",
