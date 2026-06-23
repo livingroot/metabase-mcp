@@ -147,10 +147,9 @@ export function createServer(): McpServer {
   // Wrapped in try/catch per ARCHITECTURE: unhandled handler exceptions are
   // invisible to the LLM; always return isError:true on error (T-01-07).
 
-  server.tool(
+  server.registerTool(
     "server_ping",
-    "Ping the MCP server to verify it is running and reachable.",
-    {}, // empty Zod schema — no parameters (Zod v3, D-07)
+    { description: "Ping the MCP server to verify it is running and reachable." },
     async () => {
       try {
         const payload = JSON.stringify({
@@ -178,10 +177,9 @@ export function createServer(): McpServer {
   // Handles both plain-array and { data: [] } envelope response shapes (Pitfall 1).
   // Per-handler MetabaseClient instantiation (Pitfall 4): env vars read at call time.
 
-  server.tool(
+  server.registerTool(
     "databases_list",
-    "List all databases connected to this Metabase instance. Returns ID, name, engine type, and sync status as a Markdown table.",
-    {}, // no parameters
+    { description: "List all databases connected to this Metabase instance. Returns ID, name, engine type, and sync status as a Markdown table." },
     async () => {
       try {
         const client = new MetabaseClient({});
@@ -218,10 +216,12 @@ export function createServer(): McpServer {
   // Renders null estimated_row_count as "row count unknown" (Pitfall 2).
   // Per-handler MetabaseClient instantiation (Pitfall 4).
 
-  server.tool(
+  server.registerTool(
     "databases_get_schema",
-    "Retrieve the full schema tree for a database: all tables with columns, data types, and display labels. A single call returns the complete DB → tables → fields metadata.",
-    { database_id: z.number().int().positive().describe("Metabase database ID") },
+    {
+      description: "Retrieve the full schema tree for a database: all tables with columns, data types, and display labels. A single call returns the complete DB → tables → fields metadata.",
+      inputSchema: { database_id: z.number().int().positive().describe("Metabase database ID") },
+    },
     async ({ database_id }) => {
       try {
         const client = new MetabaseClient({});
@@ -249,10 +249,12 @@ export function createServer(): McpServer {
   // Validates database_id with z.number() (T-02-04: path injection prevention).
   // Per-handler MetabaseClient instantiation (Pitfall 4).
 
-  server.tool(
+  server.registerTool(
     "tables_list",
-    "List all tables in a database. Returns ID, name, schema name, and estimated row count as a flat Markdown table. Does not include column-level detail.",
-    { database_id: z.number().int().positive().describe("Metabase database ID") },
+    {
+      description: "List all tables in a database. Returns ID, name, schema name, and estimated row count as a flat Markdown table. Does not include column-level detail.",
+      inputSchema: { database_id: z.number().int().positive().describe("Metabase database ID") },
+    },
     async ({ database_id }) => {
       try {
         const client = new MetabaseClient({});
@@ -291,10 +293,12 @@ export function createServer(): McpServer {
   // Validates table_id with z.number() (T-02-04: path injection prevention).
   // Per-handler MetabaseClient instantiation (Pitfall 4).
 
-  server.tool(
+  server.registerTool(
     "tables_get",
-    "Retrieve column-level metadata for a specific table: column names, data types, semantic types, display names, and nullable/required flags.",
-    { table_id: z.number().int().positive().describe("Metabase table ID") },
+    {
+      description: "Retrieve column-level metadata for a specific table: column names, data types, semantic types, display names, and nullable/required flags.",
+      inputSchema: { table_id: z.number().int().positive().describe("Metabase table ID") },
+    },
     async ({ table_id }) => {
       try {
         const client = new MetabaseClient({});
@@ -344,10 +348,12 @@ export function createServer(): McpServer {
   // Per-handler MetabaseClient instantiation (Pitfall 4).
   // Optionally logs has_field_values to stderr (A3 from 02-RESEARCH.md).
 
-  server.tool(
+  server.registerTool(
     "fields_get",
-    "Retrieve metadata and valid values for a specific field (column): data type, display name, semantic type, and enumerated valid values for low-cardinality fields.",
-    { field_id: z.number().int().positive().describe("Metabase field ID") },
+    {
+      description: "Retrieve metadata and valid values for a specific field (column): data type, display name, semantic type, and enumerated valid values for low-cardinality fields.",
+      inputSchema: { field_id: z.number().int().positive().describe("Metabase field ID") },
+    },
     async ({ field_id }) => {
       try {
         const client = new MetabaseClient({});
@@ -419,36 +425,38 @@ export function createServer(): McpServer {
   // T-03-03: escapeMd() applied to all column headers and cell values (in formatQueryResult)
   // D-12: per-handler MetabaseClient instantiation
 
-  server.tool(
+  server.registerTool(
     "queries_execute_sql",
-    "Execute raw SQL against a database and return results as a Markdown table. Defaults to 50 rows; pass max_rows to adjust. Use queries_export for result sets exceeding 2,000 rows.",
     {
-      database_id: z.number().int().positive().describe("Metabase database ID"),
-      sql: z.string().describe("SQL query to execute"),
-      max_rows: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .default(50)
-        .describe("Maximum rows to return (default 50)"),
-      parameters: z
-        .array(
-          z.object({
-            name: z
-              .string()
-              .describe("Template tag name matching {{name}} in SQL"),
-            value: z.string().describe("Value to bind to this tag"),
-            type: z
-              .string()
-              .optional()
-              .describe(
-                "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
-              ),
-          }),
-        )
-        .optional()
-        .describe("Filter parameters for {{template_tag}} placeholders in SQL"),
+      description: "Execute raw SQL against a database and return results as a Markdown table. Defaults to 50 rows; pass max_rows to adjust. Use queries_export for result sets exceeding 2,000 rows.",
+      inputSchema: {
+        database_id: z.number().int().positive().describe("Metabase database ID"),
+        sql: z.string().describe("SQL query to execute"),
+        max_rows: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .default(50)
+          .describe("Maximum rows to return (default 50)"),
+        parameters: z
+          .array(
+            z.object({
+              name: z
+                .string()
+                .describe("Template tag name matching {{name}} in SQL"),
+              value: z.string().describe("Value to bind to this tag"),
+              type: z
+                .string()
+                .optional()
+                .describe(
+                  "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
+                ),
+            }),
+          )
+          .optional()
+          .describe("Filter parameters for {{template_tag}} placeholders in SQL"),
+      },
     },
     async ({ database_id, sql, max_rows, parameters }) => {
       try {
@@ -493,35 +501,37 @@ export function createServer(): McpServer {
   // D-12: per-handler MetabaseClient instantiation.
   // D-14: NO card-metadata header — output is identical in shape to queries_execute_sql.
 
-  server.tool(
+  server.registerTool(
     "cards_execute",
-    "Run a saved Metabase question (card) by ID and return results as a Markdown table. Defaults to 50 rows; pass max_rows to adjust. Only native SQL cards are fully supported.",
     {
-      card_id: z.number().int().positive().describe("Metabase saved question (card) ID"),
-      max_rows: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .default(50)
-        .describe("Maximum rows to return (default 50)"),
-      parameters: z
-        .array(
-          z.object({
-            name: z
-              .string()
-              .describe("Template tag name matching {{name}} in the saved question SQL"),
-            value: z.string().describe("Value to bind to this tag"),
-            type: z
-              .string()
-              .optional()
-              .describe(
-                "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
-              ),
-          }),
-        )
-        .optional()
-        .describe("Filter parameters for {{template_tag}} placeholders in the saved question"),
+      description: "Run a saved Metabase question (card) by ID and return results as a Markdown table. Defaults to 50 rows; pass max_rows to adjust. Only native SQL cards are fully supported.",
+      inputSchema: {
+        card_id: z.number().int().positive().describe("Metabase saved question (card) ID"),
+        max_rows: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .default(50)
+          .describe("Maximum rows to return (default 50)"),
+        parameters: z
+          .array(
+            z.object({
+              name: z
+                .string()
+                .describe("Template tag name matching {{name}} in the saved question SQL"),
+              value: z.string().describe("Value to bind to this tag"),
+              type: z
+                .string()
+                .optional()
+                .describe(
+                  "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
+                ),
+            }),
+          )
+          .optional()
+          .describe("Filter parameters for {{template_tag}} placeholders in the saved question"),
+      },
     },
     async ({ card_id, max_rows, parameters }) => {
       try {
@@ -578,29 +588,31 @@ export function createServer(): McpServer {
   // T-03-08: error messages never include METABASE_API_KEY or request URL
   // D-12: per-handler MetabaseClient instantiation
 
-  server.tool(
+  server.registerTool(
     "queries_export",
-    "Export a full query result set as raw CSV text via /api/dataset/csv. Bypasses the 2,000-row JSON cap that queries_execute_sql hits. Returns the complete result set with no row limit.",
     {
-      database_id: z.number().int().positive().describe("Metabase database ID"),
-      sql: z.string().describe("SQL query to export"),
-      parameters: z
-        .array(
-          z.object({
-            name: z
-              .string()
-              .describe("Template tag name matching {{name}} in SQL"),
-            value: z.string().describe("Value to bind to this tag"),
-            type: z
-              .string()
-              .optional()
-              .describe(
-                "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
-              ),
-          }),
-        )
-        .optional()
-        .describe("Filter parameters for {{template_tag}} placeholders in SQL"),
+      description: "Export a full query result set as raw CSV text via /api/dataset/csv. Bypasses the 2,000-row JSON cap that queries_execute_sql hits. Returns the complete result set with no row limit.",
+      inputSchema: {
+        database_id: z.number().int().positive().describe("Metabase database ID"),
+        sql: z.string().describe("SQL query to export"),
+        parameters: z
+          .array(
+            z.object({
+              name: z
+                .string()
+                .describe("Template tag name matching {{name}} in SQL"),
+              value: z.string().describe("Value to bind to this tag"),
+              type: z
+                .string()
+                .optional()
+                .describe(
+                  "Metabase param type, e.g. 'category', 'date/single', 'number/='. Defaults to 'category'.",
+                ),
+            }),
+          )
+          .optional()
+          .describe("Filter parameters for {{template_tag}} placeholders in SQL"),
+      },
     },
     async ({ database_id, sql, parameters }) => {
       try {
@@ -630,14 +642,16 @@ export function createServer(): McpServer {
   // T-04-05: escapeMd() applied to all name/description/creator cells
   // D-12: per-handler MetabaseClient instantiation
 
-  server.tool(
+  server.registerTool(
     "cards_list",
-    "List saved questions (cards). Optionally filter by name substring. Returns ID, name, description, database ID, creator, and last-updated date as a Markdown table.",
     {
-      name_filter: z
-        .string()
-        .optional()
-        .describe("Optional case-insensitive substring to filter card names"),
+      description: "List saved questions (cards). Optionally filter by name substring. Returns ID, name, description, database ID, creator, and last-updated date as a Markdown table.",
+      inputSchema: {
+        name_filter: z
+          .string()
+          .optional()
+          .describe("Optional case-insensitive substring to filter card names"),
+      },
     },
     async ({ name_filter }) => {
       try {
@@ -678,15 +692,17 @@ export function createServer(): McpServer {
   // Pitfall 4: MBQL cards have no native.query — guard with type === "native" check
   // D-12: per-handler MetabaseClient instantiation
 
-  server.tool(
+  server.registerTool(
     "cards_get",
-    "Retrieve the full saved question including its SQL query definition, visualization settings, and result metadata. Returns SQL in a fenced code block for native SQL cards.",
     {
-      card_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("Metabase saved question (card) ID"),
+      description: "Retrieve the full saved question including its SQL query definition, visualization settings, and result metadata. Returns SQL in a fenced code block for native SQL cards.",
+      inputSchema: {
+        card_id: z
+          .number()
+          .int()
+          .positive()
+          .describe("Metabase saved question (card) ID"),
+      },
     },
     async ({ card_id }) => {
       try {
@@ -751,18 +767,20 @@ export function createServer(): McpServer {
   // T-04-08: createCard sends only defined fields — never null
   // D-12: per-handler MetabaseClient instantiation
 
-  server.tool(
+  server.registerTool(
     "cards_create",
-    "Create a native SQL saved question in Metabase from a database ID, SQL query, and display name. Returns the new card ID.",
     {
-      database_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("Metabase database ID the SQL runs against"),
-      sql: z.string().min(1).describe("Native SQL query body"),
-      name: z.string().min(1).describe("Display name for the saved question"),
-      description: z.string().optional().describe("Optional description"),
+      description: "Create a native SQL saved question in Metabase from a database ID, SQL query, and display name. Returns the new card ID.",
+      inputSchema: {
+        database_id: z
+          .number()
+          .int()
+          .positive()
+          .describe("Metabase database ID the SQL runs against"),
+        sql: z.string().min(1).describe("Native SQL query body"),
+        name: z.string().min(1).describe("Display name for the saved question"),
+        description: z.string().optional().describe("Optional description"),
+      },
     },
     async ({ database_id, sql, name, description }) => {
       try {
@@ -796,24 +814,26 @@ export function createServer(): McpServer {
   // T-04-08: updateCard only includes keys whose value is defined; never sends null
   // D-12: per-handler MetabaseClient instantiation
 
-  server.tool(
+  server.registerTool(
     "cards_update",
-    "Update a saved question's name, description, or SQL. Only the provided fields are changed. Requires database_id when updating sql.",
     {
-      card_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("Card ID to update"),
-      name: z.string().min(1).optional().describe("New display name"),
-      description: z.string().optional().describe("New description"),
-      sql: z.string().min(1).optional().describe("New SQL query body"),
-      database_id: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Required when updating sql — the database the SQL runs against"),
+      description: "Update a saved question's name, description, or SQL. Only the provided fields are changed. Requires database_id when updating sql.",
+      inputSchema: {
+        card_id: z
+          .number()
+          .int()
+          .positive()
+          .describe("Card ID to update"),
+        name: z.string().min(1).optional().describe("New display name"),
+        description: z.string().optional().describe("New description"),
+        sql: z.string().min(1).optional().describe("New SQL query body"),
+        database_id: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Required when updating sql — the database the SQL runs against"),
+      },
     },
     async ({ card_id, name, description, sql, database_id }) => {
       // Pitfall 3: dataset_query.database is mandatory when changing SQL
@@ -856,15 +876,17 @@ export function createServer(): McpServer {
   // T-04-02: error messages never include METABASE_API_KEY or raw URL
   // D-12: per-handler MetabaseClient instantiation
 
-  server.tool(
+  server.registerTool(
     "cards_delete",
-    "Delete a saved question by ID. Permanently removes the card from Metabase.",
     {
-      card_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("Card ID to delete"),
+      description: "Delete a saved question by ID. Permanently removes the card from Metabase.",
+      inputSchema: {
+        card_id: z
+          .number()
+          .int()
+          .positive()
+          .describe("Card ID to delete"),
+      },
     },
     async ({ card_id }) => {
       try {
@@ -897,14 +919,17 @@ export function createServer(): McpServer {
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // T-5-05: escapeMd() applied to all name/description cells
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_list",
-    "List dashboards. Optionally filter by name substring. Returns ID, name, description, card count, and last-updated date as a Markdown table.",
     {
-      name_filter: z
-        .string()
-        .optional()
-        .describe("Optional case-insensitive substring to filter dashboard names"),
+      description: "List dashboards. Optionally filter by name substring. Returns ID, name, description, card count, and last-updated date as a Markdown table.",
+      inputSchema: {
+        name_filter: z
+          .string()
+          .optional()
+          .describe("Optional case-insensitive substring to filter dashboard names"),
+      },
     },
     async ({ name_filter }) => {
       try {
@@ -947,15 +972,18 @@ export function createServer(): McpServer {
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // T-5-05: escapeMd() applied to all name/description/parameter cells
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_get",
-    "Retrieve full dashboard details: name, description, filter parameter definitions, and all placed cards with their positions, sizes, and dashcard IDs.",
     {
-      dashboard_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("Metabase dashboard ID"),
+      description: "Retrieve full dashboard details: name, description, filter parameter definitions, and all placed cards with their positions, sizes, and dashcard IDs.",
+      inputSchema: {
+        dashboard_id: z
+          .number()
+          .int()
+          .positive()
+          .describe("Metabase dashboard ID"),
+      },
     },
     async ({ dashboard_id }) => {
       try {
@@ -1021,12 +1049,15 @@ export function createServer(): McpServer {
   // T-5-val: name validated with z.string().min(1) — rejects empty/missing name
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_create",
-    "Create a new empty dashboard. Requires a name; description is optional. Returns the new dashboard ID.",
     {
-      name: z.string().min(1).describe("Display name for the dashboard"),
-      description: z.string().optional().describe("Optional dashboard description"),
+      description: "Create a new empty dashboard. Requires a name; description is optional. Returns the new dashboard ID.",
+      inputSchema: {
+        name: z.string().min(1).describe("Display name for the dashboard"),
+        description: z.string().optional().describe("Optional dashboard description"),
+      },
     },
     async ({ name, description }) => {
       try {
@@ -1060,13 +1091,16 @@ export function createServer(): McpServer {
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // T-5-null: updateDashboard only sends keys whose value is defined; never null
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_update",
-    "Rename a dashboard or change its description. Only the provided fields are changed.",
     {
-      dashboard_id: z.number().int().positive().describe("Dashboard ID to update"),
-      name: z.string().min(1).optional().describe("New display name"),
-      description: z.string().optional().describe("New description"),
+      description: "Rename a dashboard or change its description. Only the provided fields are changed.",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID to update"),
+        name: z.string().min(1).optional().describe("New display name"),
+        description: z.string().optional().describe("New description"),
+      },
     },
     async ({ dashboard_id, name, description }) => {
       try {
@@ -1098,11 +1132,14 @@ export function createServer(): McpServer {
   //           string/path injection into the DELETE URL path
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_delete",
-    "Delete a dashboard by ID. Permanently removes the dashboard from Metabase.",
     {
-      dashboard_id: z.number().int().positive().describe("Dashboard ID to delete"),
+      description: "Delete a dashboard by ID. Permanently removes the dashboard from Metabase.",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID to delete"),
+      },
     },
     async ({ dashboard_id }) => {
       try {
@@ -1136,16 +1173,19 @@ export function createServer(): McpServer {
   // T-5-path: dashboard_id / card_id validated with z.number().int().positive()
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_add_card",
-    'Add an existing saved question to a dashboard at an optional grid position. Returns the dashcard ID — capture it; it is the placement ID needed for remove/reposition/filter-connect operations (it is NOT the card ID).',
     {
-      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
-      card_id: z.number().int().positive().describe("Saved question (card) ID to place"),
-      row: z.number().int().min(0).optional().describe("Row position, 0-indexed (default 0)"),
-      col: z.number().int().min(0).optional().describe("Column position, 0-indexed (default 0)"),
-      size_x: z.number().int().min(1).max(24).optional().describe("Width in grid units (default 12)"),
-      size_y: z.number().int().min(1).optional().describe("Height in grid units (default 8)"),
+      description: "Add an existing saved question to a dashboard at an optional grid position. Returns the dashcard ID — capture it; it is the placement ID needed for remove/reposition/filter-connect operations (it is NOT the card ID).",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+        card_id: z.number().int().positive().describe("Saved question (card) ID to place"),
+        row: z.number().int().min(0).optional().describe("Row position, 0-indexed (default 0)"),
+        col: z.number().int().min(0).optional().describe("Column position, 0-indexed (default 0)"),
+        size_x: z.number().int().min(1).max(24).optional().describe("Width in grid units (default 12)"),
+        size_y: z.number().int().min(1).optional().describe("Height in grid units (default 8)"),
+      },
     },
     async ({ dashboard_id, card_id, row, col, size_x, size_y }) => {
       try {
@@ -1189,12 +1229,15 @@ export function createServer(): McpServer {
   // T-5-path: dashboard_id / dashcard_id validated with z.number().int().positive()
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_remove_card",
-    "Remove a single card from a dashboard using its dashcard placement ID (the ID returned by dashboards_add_card or shown in dashboards_get — NOT the card ID).",
     {
-      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
-      dashcard_id: z.number().int().positive().describe("Dashcard placement ID to remove (NOT the card_id)"),
+      description: "Remove a single card from a dashboard using its dashcard placement ID (the ID returned by dashboards_add_card or shown in dashboards_get — NOT the card ID).",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+        dashcard_id: z.number().int().positive().describe("Dashcard placement ID to remove (NOT the card_id)"),
+      },
     },
     async ({ dashboard_id, dashcard_id }) => {
       try {
@@ -1229,16 +1272,19 @@ export function createServer(): McpServer {
   // T-5-rmw: preservation test asserts PUT body.cards includes all existing dashcards
   // T-5-02: error messages never include METABASE_API_KEY or raw URL
   // D-12: per-handler MetabaseClient instantiation
-  server.tool(
+
+  server.registerTool(
     "dashboards_update_card",
-    "Reposition or resize a card on a dashboard. Identified by its dashcard placement ID. Other cards on the dashboard are preserved.",
     {
-      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
-      dashcard_id: z.number().int().positive().describe("Dashcard placement ID to reposition/resize (NOT the card_id)"),
-      row: z.number().int().min(0).optional().describe("New row position"),
-      col: z.number().int().min(0).optional().describe("New column position"),
-      size_x: z.number().int().min(1).max(24).optional().describe("New width in grid units"),
-      size_y: z.number().int().min(1).optional().describe("New height in grid units"),
+      description: "Reposition or resize a card on a dashboard. Identified by its dashcard placement ID. Other cards on the dashboard are preserved.",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+        dashcard_id: z.number().int().positive().describe("Dashcard placement ID to reposition/resize (NOT the card_id)"),
+        row: z.number().int().min(0).optional().describe("New row position"),
+        col: z.number().int().min(0).optional().describe("New column position"),
+        size_x: z.number().int().min(1).max(24).optional().describe("New width in grid units"),
+        size_y: z.number().int().min(1).optional().describe("New height in grid units"),
+      },
     },
     async ({ dashboard_id, dashcard_id, row, col, size_x, size_y }) => {
       try {
@@ -1285,46 +1331,51 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
   // Tool: dashboards_add_filter (DASH-10)
-  server.tool(
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
     "dashboards_add_filter",
-    "Add a filter parameter to a dashboard. Provide a unique parameter_id string; reuse the same parameter_id in dashboards_connect_filter to wire it to a card.",
     {
-      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
-      parameter_id: z
-        .string()
-        .min(1)
-        .describe(
-          "Unique string ID for this parameter (reuse it verbatim in dashboards_connect_filter)",
-        ),
-      name: z.string().min(1).describe("Display name for the filter, e.g. 'Status'"),
-      type: z
-        .enum([
-          "category",
-          "id",
-          "date/single",
-          "date/range",
-          "date/relative",
-          "date/month-year",
-          "date/quarter-year",
-          "date/all-options",
-          "number/=",
-          "number/!=",
-          "number/between",
-          "number/>=",
-          "number/<=",
-          "string/=",
-          "string/!=",
-          "string/contains",
-          "string/does-not-contain",
-          "string/starts-with",
-          "string/ends-with",
-          "location/city",
-          "location/state",
-          "location/zip_code",
-          "location/country",
-        ])
-        .describe("Filter type"),
+      description: "Add a filter parameter to a dashboard. Provide a unique parameter_id string; reuse the same parameter_id in dashboards_connect_filter to wire it to a card.",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+        parameter_id: z
+          .string()
+          .min(1)
+          .describe(
+            "Unique string ID for this parameter (reuse it verbatim in dashboards_connect_filter)",
+          ),
+        name: z.string().min(1).describe("Display name for the filter, e.g. 'Status'"),
+        type: z
+          .enum([
+            "category",
+            "id",
+            "date/single",
+            "date/range",
+            "date/relative",
+            "date/month-year",
+            "date/quarter-year",
+            "date/all-options",
+            "number/=",
+            "number/!=",
+            "number/between",
+            "number/>=",
+            "number/<=",
+            "string/=",
+            "string/!=",
+            "string/contains",
+            "string/does-not-contain",
+            "string/starts-with",
+            "string/ends-with",
+            "location/city",
+            "location/state",
+            "location/zip_code",
+            "location/country",
+          ])
+          .describe("Filter type"),
+      },
     },
     async ({ dashboard_id, parameter_id, name, type }) => {
       try {
@@ -1356,29 +1407,34 @@ export function createServer(): McpServer {
     },
   );
 
+  // -------------------------------------------------------------------------
   // Tool: dashboards_connect_filter (DASH-11)
-  server.tool(
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
     "dashboards_connect_filter",
-    "Wire a dashboard filter parameter to a native SQL card's template tag so the filter affects that card's results. The parameter_id must match one added via dashboards_add_filter; tag_name is the {{tag_name}} variable in the card's SQL.",
     {
-      dashboard_id: z.number().int().positive().describe("Dashboard ID"),
-      dashcard_id: z
-        .number()
-        .int()
-        .positive()
-        .describe("Dashcard placement ID of the card to wire (NOT the card_id)"),
-      parameter_id: z
-        .string()
-        .min(1)
-        .describe(
-          "The dashboard parameter_id to connect (must match one from dashboards_add_filter)",
-        ),
-      tag_name: z
-        .string()
-        .min(1)
-        .describe(
-          "The SQL template-tag variable name (the {{tag_name}} in the card's native SQL)",
-        ),
+      description: "Wire a dashboard filter parameter to a native SQL card's template tag so the filter affects that card's results. The parameter_id must match one added via dashboards_add_filter; tag_name is the {{tag_name}} variable in the card's SQL.",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+        dashcard_id: z
+          .number()
+          .int()
+          .positive()
+          .describe("Dashcard placement ID of the card to wire (NOT the card_id)"),
+        parameter_id: z
+          .string()
+          .min(1)
+          .describe(
+            "The dashboard parameter_id to connect (must match one from dashboards_add_filter)",
+          ),
+        tag_name: z
+          .string()
+          .min(1)
+          .describe(
+            "The SQL template-tag variable name (the {{tag_name}} in the card's native SQL)",
+          ),
+      },
     },
     async ({ dashboard_id, dashcard_id, parameter_id, tag_name }) => {
       try {
