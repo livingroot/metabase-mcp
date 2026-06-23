@@ -838,12 +838,18 @@ export function createServer(): McpServer {
         sql: z.string().min(1).describe("Native SQL query body"),
         name: z.string().min(1).describe("Display name for the saved question"),
         description: z.string().optional().describe("Optional description"),
+        tag_types: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe(
+            "Override the Metabase type for specific {{template_tag}} variables. Map of tag name to type: 'text' | 'date' | 'number' | 'dimension'. Example: {\"start_date\": \"date\", \"amount\": \"number\"}",
+          ),
       },
     },
-    async ({ database_id, sql, name, description }) => {
+    async ({ database_id, sql, name, description, tag_types }) => {
       try {
         const client = new MetabaseClient({});
-        const created = await client.createCard(database_id, sql, name, description);
+        const created = await client.createCard(database_id, sql, name, description, tag_types);
         return {
           content: [{ type: "text", text: `Card created successfully. Card ID: ${created.id}` }],
         };
@@ -897,9 +903,15 @@ export function createServer(): McpServer {
           .positive()
           .optional()
           .describe("Card ID to copy template-tag types from. Use this to restore broken filter types by providing a reference card with correct types."),
+        tag_types: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe(
+            "Override the Metabase type for specific {{template_tag}} variables when updating SQL. Map of tag name to type: 'text' | 'date' | 'number' | 'dimension'. Takes priority over source-card types. Example: {\"start_date\": \"date\"}",
+          ),
       },
     },
-    async ({ card_id, name, description, sql, database_id, ref_card_id }) => {
+    async ({ card_id, name, description, sql, database_id, ref_card_id, tag_types }) => {
       // Pitfall 3: dataset_query.database is mandatory when changing SQL
       if (sql !== undefined && database_id === undefined) {
         return {
@@ -914,7 +926,7 @@ export function createServer(): McpServer {
       }
       try {
         const client = new MetabaseClient({});
-        await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id });
+        await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id, tagTypes: tag_types });
         return {
           content: [{ type: "text", text: "Card updated successfully." }],
         };

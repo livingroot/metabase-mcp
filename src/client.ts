@@ -41,13 +41,14 @@ export class MetabaseApiError extends Error {
 
 /**
  * Parses {{tag_name}} placeholders from native SQL and returns a Metabase
- * template-tags object. Each tag gets type "text" by default.
+ * template-tags object. Each tag gets type "text" by default unless overridden
+ * via tagTypes (e.g. {"start_date": "date", "amount": "number"}).
  *
  * The id field intentionally uses the tag name (not a random UUID) so that
  * cards created with the same SQL produce identical, deterministic tag objects.
  * Metabase accepts any unique string as a tag id.
  */
-function buildTemplateTags(sql: string): Record<string, unknown> {
+function buildTemplateTags(sql: string, tagTypes?: Record<string, string>): Record<string, unknown> {
   const tags: Record<string, unknown> = {};
   const seen = new Set<string>();
   for (const [, name] of sql.matchAll(/\{\{\s*([^\s}]+)\s*\}\}/g)) {
@@ -59,7 +60,7 @@ function buildTemplateTags(sql: string): Record<string, unknown> {
       id: name,
       name,
       "display-name": name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-      type: "text",
+      type: tagTypes?.[name] ?? "text",
       required: false,
     };
   }
@@ -371,6 +372,7 @@ export class MetabaseClient {
     sql: string,
     name: string,
     description?: string,
+    tagTypes?: Record<string, string>,
   ): Promise<MetabaseCard> {
     const body: Record<string, unknown> = {
       name,
@@ -381,7 +383,7 @@ export class MetabaseClient {
         type: "native",
         native: {
           query: sql,
-          "template-tags": buildTemplateTags(sql),
+          "template-tags": buildTemplateTags(sql, tagTypes),
         },
       },
     };
@@ -415,6 +417,7 @@ export class MetabaseClient {
       sql?: string;
       databaseId?: number;
       refCardId?: number;
+      tagTypes?: Record<string, string>;
     },
   ): Promise<MetabaseCard> {
     const body: Record<string, unknown> = {};
@@ -457,6 +460,15 @@ export class MetabaseClient {
       for (const [, refName] of updates.sql.matchAll(/\{\{\s*(#[^\s}]+)\s*\}\}/g)) {
         if (sourceTags[refName] !== undefined) {
           mergedTags[refName] = sourceTags[refName];
+        }
+      }
+      // tagTypes overrides take highest priority — applied after the merge so they
+      // win over both the source card's stored types and the generated defaults.
+      if (updates.tagTypes) {
+        for (const [tagName, tagType] of Object.entries(updates.tagTypes)) {
+          if (mergedTags[tagName] !== undefined) {
+            (mergedTags[tagName] as Record<string, unknown>)["type"] = tagType;
+          }
         }
       }
 
