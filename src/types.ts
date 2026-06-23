@@ -106,6 +106,18 @@ export interface MetabaseCard extends MetabaseCardListItem {
 }
 
 /**
+ * A tab on a dashboard (Metabase v0.50+).
+ * Returned in GET /api/dashboard/:id as `tabs[]`.
+ * Must be sent back verbatim in PUT /api/dashboard/:id/cards as `ordered_tabs[]`.
+ */
+export interface MetabaseDashboardTab {
+  id: number;
+  name: string;
+  position?: number;
+  dashboard_id?: number;
+}
+
+/**
  * Represents a dashboard returned by GET /api/dashboard/:id.
  * Used by dashboard CRUD tools in Phase 5.
  */
@@ -115,6 +127,8 @@ export interface MetabaseDashboard {
   description: string | null;
   parameters: MetabaseDashboardParameter[];
   dashcards: MetabaseDashcard[];
+  /** Tab definitions — present only when the dashboard has tabs. */
+  tabs?: MetabaseDashboardTab[];
   created_at: string;
   updated_at: string;
 }
@@ -142,6 +156,10 @@ export interface MetabaseDashcard {
   size_x: number;
   size_y: number;
   parameter_mappings: MetabaseParameterMapping[];
+  /** Tab this card belongs to — null/absent when dashboard has no tabs. */
+  dashboard_tab_id?: number | null;
+  visualization_settings?: Record<string, unknown>;
+  series?: unknown[];
 }
 
 /**

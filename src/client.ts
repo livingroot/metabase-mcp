@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard, MetabaseDashboardParameter, MetabaseDashcard, MetabaseParameterMapping } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard, MetabaseDashboardParameter, MetabaseDashboardTab, MetabaseDashcard, MetabaseParameterMapping } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -33,6 +33,35 @@ export class MetabaseApiError extends Error {
     // Restore correct prototype chain (required in TypeScript when extending Error)
     Object.setPrototypeOf(this, MetabaseApiError.prototype);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parses {{tag_name}} placeholders from native SQL and returns a Metabase
+ * template-tags object. Each tag gets type "text" by default.
+ *
+ * The id field intentionally uses the tag name (not a random UUID) so that
+ * cards created with the same SQL produce identical, deterministic tag objects.
+ * Metabase accepts any unique string as a tag id.
+ */
+function buildTemplateTags(sql: string): Record<string, unknown> {
+  const tags: Record<string, unknown> = {};
+  const seen = new Set<string>();
+  for (const [, name] of sql.matchAll(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g)) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    tags[name] = {
+      id: name,
+      name,
+      "display-name": name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      type: "text",
+      required: false,
+    };
+  }
+  return tags;
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +379,7 @@ export class MetabaseClient {
         type: "native",
         native: {
           query: sql,
-          "template-tags": {},
+          "template-tags": buildTemplateTags(sql),
         },
       },
     };
@@ -394,17 +423,24 @@ export class MetabaseClient {
     }
     if (updates.sql !== undefined) {
       if (updates.databaseId === undefined) {
-        throw new Error(
-          "updateCard: databaseId is required when updating sql",
-        );
+        throw new Error("updateCard: databaseId is required when updating sql");
       }
-      // Full dataset_query required when changing SQL — Pitfall 3
+      // Fetch current card to preserve existing tag configs (type, display-name, etc.)
+      // for tags that remain in the new SQL. Tags removed from SQL are dropped.
+      const current = await this.getCard(cardId);
+      const existingTags = (current.dataset_query.native?.["template-tags"] ?? {}) as Record<string, unknown>;
+      const newTags = buildTemplateTags(updates.sql);
+      // For each tag in the new SQL, prefer the existing config over the generated default
+      const mergedTags: Record<string, unknown> = {};
+      for (const name of Object.keys(newTags)) {
+        mergedTags[name] = existingTags[name] ?? newTags[name];
+      }
       body["dataset_query"] = {
         database: updates.databaseId,
         type: "native",
         native: {
           query: updates.sql,
-          "template-tags": {},
+          "template-tags": mergedTags,
         },
       };
     }
@@ -540,7 +576,7 @@ export class MetabaseClient {
    */
   async updateDashboard(
     dashboardId: number,
-    updates: { name?: string; description?: string; parameters?: MetabaseDashboardParameter[] },
+    updates: { name?: string; description?: string; parameters?: MetabaseDashboardParameter[]; tabs?: MetabaseDashboardTab[] },
   ): Promise<MetabaseDashboard> {
     const body: Record<string, unknown> = {};
     if (updates.name !== undefined) {
@@ -551,6 +587,9 @@ export class MetabaseClient {
     }
     if (updates.parameters !== undefined) {
       body["parameters"] = updates.parameters;
+    }
+    if (updates.tabs !== undefined) {
+      body["tabs"] = updates.tabs;
     }
     return this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`, {
       method: "PUT",
@@ -629,6 +668,7 @@ export class MetabaseClient {
       dashboard_tab_id?: number | null;
       action_id?: number | null;
     }>,
+    orderedTabs: MetabaseDashboardTab[] = [],
   ): Promise<void> {
     await this.request<unknown>(`/api/dashboard/${dashboardId}/cards`, {
       method: "PUT",
@@ -647,7 +687,7 @@ export class MetabaseClient {
           dashboard_tab_id: c.dashboard_tab_id ?? null,
           action_id: c.action_id ?? null,
         })),
-        ordered_tabs: [],
+        ordered_tabs: orderedTabs,
       }),
     });
   }
@@ -692,9 +732,9 @@ export class MetabaseClient {
         size_x: dc.size_x,
         size_y: dc.size_y,
         parameter_mappings: dc.parameter_mappings,
-        visualization_settings: {},
-        series: [],
-        dashboard_tab_id: null,
+        visualization_settings: dc.visualization_settings ?? {},
+        series: dc.series ?? [],
+        dashboard_tab_id: dc.dashboard_tab_id ?? null,
         action_id: null,
       })),
       {
@@ -717,7 +757,7 @@ export class MetabaseClient {
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cards: allCards, ordered_tabs: [] }),
+        body: JSON.stringify({ cards: allCards, ordered_tabs: dashboard.tabs ?? [] }),
       },
     );
 
@@ -747,7 +787,7 @@ export class MetabaseClient {
   async removeDashboardCard(dashboardId: number, dashcardId: number): Promise<void> {
     const dashboard = await this.getDashboard(dashboardId);
     const remaining = dashboard.dashcards.filter((dc) => dc.id !== dashcardId);
-    await this.updateDashboardCards(dashboardId, remaining);
+    await this.updateDashboardCards(dashboardId, remaining, dashboard.tabs ?? []);
   }
 
   /**

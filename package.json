@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:integration": "INTEGRATION=true vitest --config vitest.integration.ts run",
+    "test:dashboard-bugs": "INTEGRATION=true vitest --config vitest.dashboard-bugs.ts run",
     "test:all": "npm run test:unit && npm run test:integration",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

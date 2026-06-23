@@ -680,6 +680,64 @@ export function createServer(): McpServer {
   );
 
   // -------------------------------------------------------------------------
+  // Tool: cards_find (CARDS-02b)
+  // -------------------------------------------------------------------------
+  // Searches saved questions by name substring and returns full SQL for each
+  // match. One call replaces cards_list + N×cards_get when the agent needs to
+  // locate a card by name and inspect its query.
+  // Results capped at 10 to avoid large responses.
+
+  server.registerTool(
+    "cards_find",
+    {
+      description: "Find saved questions by name and return their SQL. Use this when you know (part of) the card name. Returns ID, name, and SQL for each match — no need to call cards_get separately.",
+      inputSchema: {
+        name: z.string().min(1).describe("Name substring to search for (case-insensitive)"),
+      },
+    },
+    async ({ name }) => {
+      try {
+        const client = new MetabaseClient({});
+        const cards = await client.listCards(name);
+        if (cards.length === 0) {
+          return { content: [{ type: "text", text: `No cards found matching "${name}".` }] };
+        }
+        const capped = cards.slice(0, 10);
+        const lines: string[] = [
+          `Found ${cards.length} card(s) matching "${name}"${cards.length > 10 ? " (showing first 10)" : ""}:`,
+          "",
+        ];
+        for (const item of capped) {
+          try {
+            const card = await client.getCard(item.id);
+            const nativeStage = card.dataset_query.stages?.find(
+              (s) => s["lib/type"] === "mbql.stage/native",
+            );
+            const sql = nativeStage?.native ?? card.dataset_query.native?.query;
+            lines.push(`### ${escapeMd(card.name)} (id=${card.id})`);
+            if (sql) {
+              lines.push("```sql");
+              lines.push(sql.replace(/```/g, "\\`\\`\\`"));
+              lines.push("```");
+            } else {
+              lines.push("*(non-native card — SQL not available)*");
+            }
+            lines.push("");
+          } catch {
+            lines.push(`### ${escapeMd(item.name)} (id=${item.id})`);
+            lines.push("*(could not load details)*");
+            lines.push("");
+          }
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { isError: true, content: [{ type: "text", text: `cards_find error: ${msg}` }] };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // Tool: cards_get (CARDS-03)
   // -------------------------------------------------------------------------
   // Returns the full saved question including its SQL query definition,
@@ -1314,9 +1372,10 @@ export function createServer(): McpServer {
           size_x: dc.id === dashcard_id ? (size_x ?? dc.size_x) : dc.size_x,
           size_y: dc.id === dashcard_id ? (size_y ?? dc.size_y) : dc.size_y,
           parameter_mappings: dc.parameter_mappings ?? [],
+          dashboard_tab_id: dc.dashboard_tab_id ?? null,
         }));
-        // Step 4: PUT full replacement
-        await client.updateDashboardCards(dashboard_id, fullCardsArray);
+        // Step 4: PUT full replacement — preserve tabs (ordered_tabs must include current tabs)
+        await client.updateDashboardCards(dashboard_id, fullCardsArray, dashboard.tabs ?? []);
         return {
           content: [{ type: "text", text: "Card repositioned." }],
         };
@@ -1385,9 +1444,11 @@ export function createServer(): McpServer {
         // Step 2: build the new parameter
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
         const newParam = { id: parameter_id, name, type, slug };
-        // Step 3: PUT with existing parameters preserved + new parameter appended
+        // Step 3: PUT with existing parameters preserved + new parameter appended.
+        // Send tabs too — Metabase v0.59 may wipe them if omitted from the PUT body.
         await client.updateDashboard(dashboard_id, {
           parameters: [...dashboard.parameters, newParam],
+          tabs: dashboard.tabs,
         });
         return {
           content: [
@@ -1485,6 +1546,7 @@ export function createServer(): McpServer {
                   target: ["variable", ["template-tag", tag_name]],
                 },
               ],
+              dashboard_tab_id: dc.dashboard_tab_id ?? null,
             };
           }
           // Preserve every other dashcard with its existing parameter_mappings
@@ -1496,10 +1558,11 @@ export function createServer(): McpServer {
             size_x: dc.size_x,
             size_y: dc.size_y,
             parameter_mappings: dc.parameter_mappings ?? [],
+            dashboard_tab_id: dc.dashboard_tab_id ?? null,
           };
         });
-        // Step 5: PUT the full cards array
-        await client.updateDashboardCards(dashboard_id, fullCardsArray);
+        // Step 5: PUT the full cards array — preserve tabs (ordered_tabs must include current tabs)
+        await client.updateDashboardCards(dashboard_id, fullCardsArray, dashboard.tabs ?? []);
         return {
           content: [
             {

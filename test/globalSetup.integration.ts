@@ -81,6 +81,25 @@ export async function setup(project: TestProject): Promise<void> {
       // Omit the database field — use embedded H2 by default (Pitfall 4)
     }),
   });
+
+  // 403 means the admin user already exists (setup-token is stale but /api/setup
+  // rejects duplicate user creation). Fall back to session login + METABASE_API_KEY.
+  if (setupRes.status === 403 || setupRes.status === 400) {
+    const text = await setupRes.text();
+    console.error(`[globalSetup] POST /api/setup returned ${setupRes.status} (user already exists): ${text}`);
+    const existingApiKey = process.env.METABASE_API_KEY;
+    if (!existingApiKey) {
+      throw new Error(
+        `Metabase setup-token is present but /api/setup returned ${setupRes.status} (user already exists). ` +
+          "Pass an existing API key via METABASE_API_KEY env var."
+      );
+    }
+    console.error("[globalSetup] Reusing METABASE_API_KEY from environment (stale setup-token)");
+    project.provide("apiKey", existingApiKey);
+    project.provide("baseUrl", METABASE_URL);
+    return;
+  }
+
   if (!setupRes.ok) {
     const text = await setupRes.text();
     console.error(`[globalSetup] POST /api/setup response body: ${text}`);
