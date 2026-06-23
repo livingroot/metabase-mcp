@@ -909,9 +909,21 @@ export function createServer(): McpServer {
           .describe(
             "Override the Metabase type for specific {{template_tag}} variables when updating SQL. Map of tag name to type: 'text' | 'date' | 'number' | 'dimension'. Takes priority over source-card types. Example: {\"start_date\": \"date\"}",
           ),
+        display: z
+          .string()
+          .optional()
+          .describe(
+            "Visualization type: 'table' | 'line' | 'bar' | 'area' | 'pie' | 'scalar' | 'row' | 'combo'. Example: 'bar'",
+          ),
+        visualization_settings: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            "Visualization settings object. For bar/line charts use graph.dimensions and graph.metrics to set axes. Example: {\"graph.dimensions\": [\"День\"], \"graph.metrics\": [\"Общая сумма\"]}",
+          ),
       },
     },
-    async ({ card_id, name, description, sql, database_id, ref_card_id, tag_types }) => {
+    async ({ card_id, name, description, sql, database_id, ref_card_id, tag_types, display, visualization_settings }) => {
       // Pitfall 3: dataset_query.database is mandatory when changing SQL
       if (sql !== undefined && database_id === undefined) {
         return {
@@ -926,7 +938,7 @@ export function createServer(): McpServer {
       }
       try {
         const client = new MetabaseClient({});
-        await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id, tagTypes: tag_types });
+        await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id, tagTypes: tag_types, display, visualizationSettings: visualization_settings });
         return {
           content: [{ type: "text", text: "Card updated successfully." }],
         };

@@ -418,6 +418,8 @@ export class MetabaseClient {
       databaseId?: number;
       refCardId?: number;
       tagTypes?: Record<string, string>;
+      display?: string;
+      visualizationSettings?: Record<string, unknown>;
     },
   ): Promise<MetabaseCard> {
     const body: Record<string, unknown> = {};
@@ -426,6 +428,12 @@ export class MetabaseClient {
     }
     if (updates.description !== undefined) {
       body["description"] = updates.description;
+    }
+    if (updates.display !== undefined) {
+      body["display"] = updates.display;
+    }
+    if (updates.visualizationSettings !== undefined) {
+      body["visualization_settings"] = updates.visualizationSettings;
     }
     if (updates.sql !== undefined) {
       if (updates.databaseId === undefined) {
