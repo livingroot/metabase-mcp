@@ -844,12 +844,26 @@ export function createServer(): McpServer {
           .describe(
             "Override the Metabase type for specific {{template_tag}} variables. Map of tag name to type: 'text' | 'date' | 'number' | 'dimension'. Example: {\"start_date\": \"date\", \"amount\": \"number\"}",
           ),
+        tag_configs: z
+          .record(
+            z.string(),
+            z.object({
+              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension'"),
+              field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
+              widget_type: z.string().optional().describe("Widget type for dimension filter, e.g. 'string/=' (default when field_id is set)"),
+              display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
+            }),
+          )
+          .optional()
+          .describe(
+            "Full tag configuration for {{template_tag}} variables. Supersedes tag_types. Use for dimension tags: set type='dimension', field_id=<id> to create a working dashboard filter. Example: {\"sprint_name\": {\"type\": \"dimension\", \"field_id\": 12694}}",
+          ),
       },
     },
-    async ({ database_id, sql, name, description, tag_types }) => {
+    async ({ database_id, sql, name, description, tag_types, tag_configs }) => {
       try {
         const client = new MetabaseClient({});
-        const created = await client.createCard(database_id, sql, name, description, tag_types);
+        const created = await client.createCard(database_id, sql, name, description, tag_types, tag_configs);
         return {
           content: [{ type: "text", text: `Card created successfully. Card ID: ${created.id}` }],
         };
@@ -909,6 +923,20 @@ export function createServer(): McpServer {
           .describe(
             "Override the Metabase type for specific {{template_tag}} variables when updating SQL. Map of tag name to type: 'text' | 'date' | 'number' | 'dimension'. Takes priority over source-card types. Example: {\"start_date\": \"date\"}",
           ),
+        tag_configs: z
+          .record(
+            z.string(),
+            z.object({
+              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension'"),
+              field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
+              widget_type: z.string().optional().describe("Widget type for dimension filter, e.g. 'string/=' (default when field_id is set)"),
+              display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
+            }),
+          )
+          .optional()
+          .describe(
+            "Full tag configuration for {{template_tag}} variables. Supersedes tag_types. Use for dimension tags: set type='dimension', field_id=<id> to create a working dashboard filter. Example: {\"sprint_name\": {\"type\": \"dimension\", \"field_id\": 12694}}",
+          ),
         display: z
           .string()
           .optional()
@@ -923,7 +951,7 @@ export function createServer(): McpServer {
           ),
       },
     },
-    async ({ card_id, name, description, sql, database_id, ref_card_id, tag_types, display, visualization_settings }) => {
+    async ({ card_id, name, description, sql, database_id, ref_card_id, tag_types, tag_configs, display, visualization_settings }) => {
       // Pitfall 3: dataset_query.database is mandatory when changing SQL
       if (sql !== undefined && database_id === undefined) {
         return {
@@ -938,7 +966,7 @@ export function createServer(): McpServer {
       }
       try {
         const client = new MetabaseClient({});
-        await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id, tagTypes: tag_types, display, visualizationSettings: visualization_settings });
+        await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id, tagTypes: tag_types, tagConfigs: tag_configs, display, visualizationSettings: visualization_settings });
         return {
           content: [{ type: "text", text: "Card updated successfully." }],
         };
@@ -1576,7 +1604,7 @@ export function createServer(): McpServer {
                   target: ["variable", ["template-tag", tag_name]],
                 },
               ],
-              dashboard_tab_id: dc.dashboard_tab_id ?? null,
+              ...(dc.dashboard_tab_id !== undefined ? { dashboard_tab_id: dc.dashboard_tab_id } : {}),
             };
           }
           // Preserve every other dashcard with its existing parameter_mappings
@@ -1588,7 +1616,7 @@ export function createServer(): McpServer {
             size_x: dc.size_x,
             size_y: dc.size_y,
             parameter_mappings: dc.parameter_mappings ?? [],
-            dashboard_tab_id: dc.dashboard_tab_id ?? null,
+            ...(dc.dashboard_tab_id !== undefined ? { dashboard_tab_id: dc.dashboard_tab_id } : {}),
           };
         });
         // Step 5: PUT the full cards array — preserve tabs (ordered_tabs must include current tabs)

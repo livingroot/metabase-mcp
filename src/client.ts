@@ -39,6 +39,33 @@ export class MetabaseApiError extends Error {
 // Helpers
 // ---------------------------------------------------------------------------
 
+export interface TagConfig {
+  type: string;
+  field_id?: number;
+  widget_type?: string;
+  display_name?: string;
+}
+
+/**
+ * Applies tagConfigs overrides to an already-built template-tags map.
+ * When field_id is set, also writes the dimension and widget-type fields
+ * required for a working Metabase dashboard dimension filter.
+ */
+function applyTagConfigs(tags: Record<string, unknown>, tagConfigs: Record<string, TagConfig>): void {
+  for (const [tagName, config] of Object.entries(tagConfigs)) {
+    if (tags[tagName] === undefined) continue;
+    const tag = tags[tagName] as Record<string, unknown>;
+    tag["type"] = config.type;
+    if (config.field_id !== undefined) {
+      tag["dimension"] = ["field", config.field_id, null];
+      tag["widget-type"] = config.widget_type ?? "string/=";
+    }
+    if (config.display_name !== undefined) {
+      tag["display-name"] = config.display_name;
+    }
+  }
+}
+
 /**
  * Parses {{tag_name}} placeholders from native SQL and returns a Metabase
  * template-tags object. Each tag gets type "text" by default unless overridden
@@ -373,7 +400,12 @@ export class MetabaseClient {
     name: string,
     description?: string,
     tagTypes?: Record<string, string>,
+    tagConfigs?: Record<string, TagConfig>,
   ): Promise<MetabaseCard> {
+    const templateTags = buildTemplateTags(sql, tagTypes);
+    if (tagConfigs) {
+      applyTagConfigs(templateTags, tagConfigs);
+    }
     const body: Record<string, unknown> = {
       name,
       display: "table",
@@ -383,7 +415,7 @@ export class MetabaseClient {
         type: "native",
         native: {
           query: sql,
-          "template-tags": buildTemplateTags(sql, tagTypes),
+          "template-tags": templateTags,
         },
       },
     };
@@ -418,6 +450,7 @@ export class MetabaseClient {
       databaseId?: number;
       refCardId?: number;
       tagTypes?: Record<string, string>;
+      tagConfigs?: Record<string, TagConfig>;
       display?: string;
       visualizationSettings?: Record<string, unknown>;
     },
@@ -478,6 +511,11 @@ export class MetabaseClient {
             (mergedTags[tagName] as Record<string, unknown>)["type"] = tagType;
           }
         }
+      }
+      // tagConfigs takes highest priority and also writes dimension/widget-type
+      // fields required for dimension filter tags to work on dashboards.
+      if (updates.tagConfigs) {
+        applyTagConfigs(mergedTags, updates.tagConfigs);
       }
 
       // Build dataset_query in the SAME FORMAT as the source card so Metabase
