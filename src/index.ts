@@ -1884,10 +1884,27 @@ async function startHttpServer(port: number, host: string): Promise<void> {
         issuer: origin,
         authorization_endpoint: `${origin}/authorize`,
         token_endpoint: `${origin}/oauth/token`,
+        registration_endpoint: `${origin}/oauth/register`,
         grant_types_supported: ["authorization_code"],
         code_challenge_methods_supported: ["S256"],
         response_types_supported: ["code"],
         token_endpoint_auth_methods_supported: ["none"],
+      }));
+      return;
+    }
+
+    // Dynamic Client Registration (RFC 7591) — allows clients without a pre-configured client_id
+    if (pathname === "/oauth/register" && req.method === "POST") {
+      const body = await readBody(req) as Record<string, unknown>;
+      res.writeHead(201, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        client_id: randomUUID(),
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+        redirect_uris: body?.redirect_uris ?? [],
+        client_name: body?.client_name ?? "MCP Client",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
       }));
       return;
     }
