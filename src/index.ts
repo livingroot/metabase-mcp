@@ -841,6 +841,12 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
         sql: z.string().min(1).describe("Native SQL query body"),
         name: z.string().min(1).describe("Display name for the saved question"),
         description: z.string().optional().describe("Optional description"),
+        display: z
+          .string()
+          .optional()
+          .describe(
+            "Visualization type (default 'table'). Common values: 'table' | 'line' | 'bar' | 'area' | 'pie' | 'scalar' | 'smartscalar' | 'row' | 'combo' | 'scatter' | 'funnel' | 'waterfall' | 'gauge' | 'progress' | 'map' | 'pivot'.",
+          ),
         tag_types: z
           .record(z.string(), z.string())
           .optional()
@@ -863,10 +869,10 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           ),
       },
     },
-    async ({ database_id, sql, name, description, tag_types, tag_configs }) => {
+    async ({ database_id, sql, name, description, display, tag_types, tag_configs }) => {
       try {
         const client = new MetabaseClient(credentials);
-        const created = await client.createCard(database_id, sql, name, description, tag_types, tag_configs);
+        const created = await client.createCard(database_id, sql, name, description, tag_types, tag_configs, display);
         return {
           content: [{ type: "text", text: `Card created successfully. Card ID: ${created.id}` }],
         };
@@ -944,7 +950,7 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           .string()
           .optional()
           .describe(
-            "Visualization type: 'table' | 'line' | 'bar' | 'area' | 'pie' | 'scalar' | 'row' | 'combo'. Example: 'bar'",
+            "Visualization type. Common values: 'table' | 'line' | 'bar' | 'area' | 'pie' | 'scalar' | 'smartscalar' | 'row' | 'combo' | 'scatter' | 'funnel' | 'waterfall' | 'gauge' | 'progress' | 'map' | 'pivot'. Example: 'bar'",
           ),
         visualization_settings: z
           .record(z.string(), z.unknown())
@@ -1149,11 +1155,12 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           lines.push("(none)");
         } else {
           // "Dashcard ID" = placement id; "Card ID" = saved question id (Pitfall 1)
-          lines.push("| Dashcard ID | Card ID | Row | Col | Width | Height |");
-          lines.push("|------------|---------|-----|-----|-------|--------|");
+          // card_id is null for virtual cards (text blocks, headings)
+          lines.push("| Dashcard ID | Card ID | Tab ID | Row | Col | Width | Height |");
+          lines.push("|------------|---------|--------|-----|-----|-------|--------|");
           for (const dc of dashboard.dashcards) {
             lines.push(
-              `| ${dc.id} | ${dc.card_id} | ${dc.row} | ${dc.col} | ${dc.size_x} | ${dc.size_y} |`,
+              `| ${dc.id} | ${dc.card_id ?? "(text)"} | ${dc.dashboard_tab_id ?? "—"} | ${dc.row} | ${dc.col} | ${dc.size_x} | ${dc.size_y} |`,
             );
           }
         }
@@ -1227,32 +1234,32 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
   server.registerTool(
     "dashboards_update",
     {
-      description: "Rename a dashboard or change its description. Only the provided fields are changed.",
+      description: "Update a dashboard's metadata. Only the provided fields are changed. Preserves parameters, tabs, and all other dashboard fields via read-modify-write.",
       inputSchema: {
         dashboard_id: z.number().int().positive().describe("Dashboard ID to update"),
         name: z.string().min(1).optional().describe("New display name"),
         description: z.string().optional().describe("New description"),
+        auto_apply_filters: z.boolean().optional().describe("When true, filters are applied automatically as the user types. When false, a button must be clicked to apply."),
+        width: z.enum(["full", "fixed"]).optional().describe("Dashboard layout width: 'full' stretches to the browser viewport; 'fixed' uses a fixed-width container."),
       },
     },
-    async ({ dashboard_id, name, description }) => {
+    async ({ dashboard_id, name, description, auto_apply_filters, width }) => {
       try {
         const client = new MetabaseClient(credentials);
-        // Read-modify-write: fetch current state first to preserve parameters, tabs,
-        // and any other dashboard fields. PUT /api/dashboard/:id resets fields that
-        // are not included in the body — sending only {name} would wipe parameters[].
         const current = await client.getDashboard(dashboard_id);
         await client.updateDashboard(dashboard_id, {
           name,
           description,
           parameters: current.parameters,
           tabs: current.tabs,
+          auto_apply_filters,
+          width,
         });
         return {
           content: [{ type: "text", text: "Dashboard updated successfully." }],
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // T-5-02: never echo METABASE_API_KEY or raw request URL
         return {
           isError: true,
           content: [{ type: "text", text: `dashboards_update error: ${msg}` }],
@@ -1301,6 +1308,48 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
   );
 
   // -------------------------------------------------------------------------
+  // Tool: dashboards_create_tab
+  // -------------------------------------------------------------------------
+  // Creates a new tab on an existing dashboard.
+  // Uses PUT /api/dashboard/:id with tabs array containing a new entry with id: -1.
+  // Returns the new tab ID — required for dashboards_add_card tab_id parameter.
+  //
+  // T-5-path: dashboard_id validated with z.number().int().positive()
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.registerTool(
+    "dashboards_create_tab",
+    {
+      description: "Create a new tab on a dashboard. Returns the new tab ID — use it in dashboards_add_card's tab_id parameter to place cards on this tab.",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+        name: z.string().min(1).describe("Tab name, e.g. 'Overview' or 'Details'"),
+      },
+    },
+    async ({ dashboard_id, name }) => {
+      try {
+        const client = new MetabaseClient(credentials);
+        const tab = await client.addDashboardTab(dashboard_id, name);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Tab '${name}' created. Tab ID: ${tab.id} (use this tab_id in dashboards_add_card or dashboards_add_text_card to place cards on this tab).`,
+            },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_create_tab error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // Tool: dashboards_add_card (DASH-07)
   // -------------------------------------------------------------------------
   // Adds an existing saved question (card) to a dashboard at an optional grid
@@ -1318,7 +1367,7 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
   server.registerTool(
     "dashboards_add_card",
     {
-      description: "Add an existing saved question to a dashboard at an optional grid position. Returns the dashcard ID — capture it; it is the placement ID needed for remove/reposition/filter-connect operations (it is NOT the card ID).",
+      description: "Add an existing saved question to a dashboard at an optional grid position. Returns the dashcard ID — capture it; it is the placement ID needed for remove/reposition/filter-connect operations (it is NOT the card ID). Pass tab_id to place the card on a specific tab.",
       inputSchema: {
         dashboard_id: z.number().int().positive().describe("Dashboard ID"),
         card_id: z.number().int().positive().describe("Saved question (card) ID to place"),
@@ -1326,9 +1375,10 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
         col: z.number().int().min(0).optional().describe("Column position, 0-indexed (default 0)"),
         size_x: z.number().int().min(1).max(24).optional().describe("Width in grid units (default 12)"),
         size_y: z.number().int().min(1).optional().describe("Height in grid units (default 8)"),
+        tab_id: z.number().int().positive().optional().describe("Tab ID to place the card on. Only relevant when the dashboard has tabs; defaults to the first tab if omitted."),
       },
     },
-    async ({ dashboard_id, card_id, row, col, size_x, size_y }) => {
+    async ({ dashboard_id, card_id, row, col, size_x, size_y, tab_id }) => {
       try {
         const client = new MetabaseClient(credentials);
         const dashcard = await client.addDashboardCard(dashboard_id, card_id, {
@@ -1336,6 +1386,7 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           col: col ?? 0,
           size_x: size_x ?? 12,
           size_y: size_y ?? 8,
+          tab_id,
         });
         return {
           content: [
@@ -1399,6 +1450,63 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
   );
 
   // -------------------------------------------------------------------------
+  // Tool: dashboards_add_text_card
+  // -------------------------------------------------------------------------
+  // Adds a virtual card (markdown text block or heading) to a dashboard.
+  // Virtual cards have no saved question — they display static text/markdown.
+  // Uses the same PUT endpoint paths as dashboards_add_card.
+  //
+  // T-5-path: dashboard_id validated with z.number().int().positive()
+  // T-5-02: error messages never include METABASE_API_KEY or raw URL
+  // D-12: per-handler MetabaseClient instantiation
+
+  server.registerTool(
+    "dashboards_add_text_card",
+    {
+      description: "Add a markdown text block or heading to a dashboard. Use 'text' for multi-line markdown content (supports headers, lists, bold, etc.) and 'heading' for a single-line section title. Returns the dashcard ID.",
+      inputSchema: {
+        dashboard_id: z.number().int().positive().describe("Dashboard ID"),
+        text: z.string().min(1).describe("Markdown content for 'text' cards, or plain text for 'heading' cards. Example: '## My Section\\nSome description here.'"),
+        display: z
+          .enum(["text", "heading"])
+          .default("text")
+          .describe("Card type: 'text' for a markdown block, 'heading' for a single-line section title."),
+        row: z.number().int().min(0).optional().describe("Row position, 0-indexed (default 0)"),
+        col: z.number().int().min(0).optional().describe("Column position, 0-indexed (default 0)"),
+        size_x: z.number().int().min(1).max(24).optional().describe("Width in grid units (default 12)"),
+        size_y: z.number().int().min(1).optional().describe("Height in grid units (default 2 for text, 1 for heading)"),
+        tab_id: z.number().int().positive().optional().describe("Tab ID to place the card on. Only relevant when the dashboard has tabs; defaults to the first tab if omitted."),
+      },
+    },
+    async ({ dashboard_id, text, display, row, col, size_x, size_y, tab_id }) => {
+      try {
+        const client = new MetabaseClient(credentials);
+        const dashcard = await client.addDashboardTextCard(dashboard_id, text, display, {
+          row: row ?? 0,
+          col: col ?? 0,
+          size_x: size_x ?? 12,
+          size_y: size_y ?? (display === "heading" ? 1 : 2),
+          tab_id,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Text card added to dashboard. Dashcard ID: ${dashcard.id} (use this dashcard_id for remove/reposition operations).`,
+            },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `dashboards_add_text_card error: ${msg}` }],
+        };
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // Tool: dashboards_update_card (DASH-09)
   // -------------------------------------------------------------------------
   // Repositions or resizes a single card on a dashboard by its dashcard placement
@@ -1417,7 +1525,7 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
   server.registerTool(
     "dashboards_update_card",
     {
-      description: "Reposition or resize a card on a dashboard. Identified by its dashcard placement ID. Other cards on the dashboard are preserved.",
+      description: "Reposition, resize, or move a card between tabs on a dashboard. Identified by its dashcard placement ID. Other cards on the dashboard are preserved.",
       inputSchema: {
         dashboard_id: z.number().int().positive().describe("Dashboard ID"),
         dashcard_id: z.number().int().positive().describe("Dashcard placement ID to reposition/resize (NOT the card_id)"),
@@ -1425,9 +1533,10 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
         col: z.number().int().min(0).optional().describe("New column position"),
         size_x: z.number().int().min(1).max(24).optional().describe("New width in grid units"),
         size_y: z.number().int().min(1).optional().describe("New height in grid units"),
+        tab_id: z.number().int().positive().optional().describe("Move the card to this tab ID. Only relevant when the dashboard has tabs."),
       },
     },
-    async ({ dashboard_id, dashcard_id, row, col, size_x, size_y }) => {
+    async ({ dashboard_id, dashcard_id, row, col, size_x, size_y, tab_id }) => {
       try {
         const client = new MetabaseClient(credentials);
         // Step 1: fetch current dashboard state (read-modify-write — Pitfall 2)
@@ -1455,7 +1564,9 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           size_x: dc.id === dashcard_id ? (size_x ?? dc.size_x) : dc.size_x,
           size_y: dc.id === dashcard_id ? (size_y ?? dc.size_y) : dc.size_y,
           parameter_mappings: dc.parameter_mappings ?? [],
-          dashboard_tab_id: dc.dashboard_tab_id ?? null,
+          dashboard_tab_id: dc.id === dashcard_id
+            ? (tab_id !== undefined ? tab_id : (dc.dashboard_tab_id ?? null))
+            : (dc.dashboard_tab_id ?? null),
         }));
         // Step 4: PUT full replacement — preserve tabs (ordered_tabs must include current tabs)
         await client.updateDashboardCards(dashboard_id, fullCardsArray, dashboard.tabs ?? []);
@@ -1521,7 +1632,7 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           .enum(["card", "static-list", "fields"])
           .optional()
           .describe(
-            "Where dropdown values come from. 'static-list': fixed list (provide values_source_config.values). 'card': from a saved question (provide values_source_config.card_id + value_field). 'fields': from connected dimension fields (use when connecting via tag_config with field_id). Omit to let Metabase derive values from the connected field.",
+            "Where dropdown values come from. 'static-list': fixed list (provide values_source_config.values). 'card': from a saved question (provide values_source_config.card_id + value_field). 'fields': auto-derive from connected dimension field — equivalent to omitting this parameter (Metabase does not accept 'fields' as an API value; the server omits it automatically). Omit to let Metabase derive values from the connected field.",
           ),
         values_source_config: z
           .record(z.string(), z.unknown())
@@ -1539,7 +1650,10 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
         // Step 2: build the new parameter
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
         const newParam: Record<string, unknown> = { id: parameter_id, name, type, slug };
-        if (values_source_type !== undefined) {
+        // "fields" means "auto-derive from connected dimension field" — omit the field and
+        // Metabase will populate values from the connected field automatically. Sending
+        // "fields" as the API value causes a 400 response in Metabase v0.59.
+        if (values_source_type !== undefined && values_source_type !== "fields") {
           newParam["values_source_type"] = values_source_type;
         }
         if (values_source_config !== undefined) {

@@ -155,10 +155,11 @@ export interface MetabaseDashboardParameter {
 
 /**
  * A card placed on a dashboard (dashboard card).
+ * card_id is null for virtual cards (text blocks, headings).
  */
 export interface MetabaseDashcard {
   id: number;
-  card_id: number;
+  card_id: number | null;
   dashboard_id: number;
   row: number;
   col: number;
@@ -178,7 +179,7 @@ export interface MetabaseDashcard {
  */
 export interface MetabaseParameterMapping {
   parameter_id: string;
-  card_id: number;
+  card_id: number | null;
   target: unknown;
 }
 

@@ -401,6 +401,7 @@ export class MetabaseClient {
     description?: string,
     tagTypes?: Record<string, string>,
     tagConfigs?: Record<string, TagConfig>,
+    display?: string,
   ): Promise<MetabaseCard> {
     const templateTags = buildTemplateTags(sql, tagTypes);
     if (tagConfigs) {
@@ -408,7 +409,7 @@ export class MetabaseClient {
     }
     const body: Record<string, unknown> = {
       name,
-      display: "table",
+      display: display ?? "table",
       visualization_settings: {},
       dataset_query: {
         database: databaseId,
@@ -678,26 +679,64 @@ export class MetabaseClient {
    */
   async updateDashboard(
     dashboardId: number,
-    updates: { name?: string; description?: string; parameters?: MetabaseDashboardParameter[]; tabs?: MetabaseDashboardTab[] },
+    updates: {
+      name?: string;
+      description?: string;
+      parameters?: MetabaseDashboardParameter[];
+      tabs?: MetabaseDashboardTab[];
+      auto_apply_filters?: boolean;
+      width?: string;
+    },
   ): Promise<MetabaseDashboard> {
     const body: Record<string, unknown> = {};
-    if (updates.name !== undefined) {
-      body["name"] = updates.name;
-    }
-    if (updates.description !== undefined) {
-      body["description"] = updates.description;
-    }
-    if (updates.parameters !== undefined) {
-      body["parameters"] = updates.parameters;
-    }
-    if (updates.tabs !== undefined) {
-      body["tabs"] = updates.tabs;
-    }
+    if (updates.name !== undefined) body["name"] = updates.name;
+    if (updates.description !== undefined) body["description"] = updates.description;
+    if (updates.parameters !== undefined) body["parameters"] = updates.parameters;
+    if (updates.tabs !== undefined) body["tabs"] = updates.tabs;
+    if (updates.auto_apply_filters !== undefined) body["auto_apply_filters"] = updates.auto_apply_filters;
+    if (updates.width !== undefined) body["width"] = updates.width;
     return this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+  }
+
+  /**
+   * Creates a new tab on a dashboard.
+   * Uses PUT /api/dashboard/:id with tabs array containing existing tabs + a new entry with id: -1.
+   * Returns the newly created tab (found by comparing before/after IDs).
+   */
+  async addDashboardTab(dashboardId: number, name: string): Promise<MetabaseDashboardTab> {
+    const dashboard = await this.getDashboard(dashboardId);
+    const existingIds = new Set((dashboard.tabs ?? []).map((t) => t.id));
+    const response = await this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tabs: [
+          ...(dashboard.tabs ?? []).map((t) => ({ id: t.id, name: t.name })),
+          { id: -1, name },
+        ],
+        dashcards: dashboard.dashcards.map((dc) => ({
+          id: dc.id,
+          card_id: dc.card_id,
+          row: dc.row,
+          col: dc.col,
+          size_x: dc.size_x,
+          size_y: dc.size_y,
+          parameter_mappings: dc.parameter_mappings,
+          visualization_settings: dc.visualization_settings ?? {},
+          series: dc.series ?? [],
+          dashboard_tab_id: dc.dashboard_tab_id ?? null,
+        })),
+      }),
+    });
+    const newTab = (response.tabs ?? []).find((t) => !existingIds.has(t.id));
+    if (!newTab) {
+      throw new Error(`addDashboardTab: new tab not found in PUT response`);
+    }
+    return newTab;
   }
 
   /**
@@ -767,7 +806,7 @@ export class MetabaseClient {
     dashboardId: number,
     cards: Array<{
       id: number;
-      card_id: number;
+      card_id: number | null;
       row: number;
       col: number;
       size_x: number;
@@ -845,7 +884,7 @@ export class MetabaseClient {
   async addDashboardCard(
     dashboardId: number,
     cardId: number,
-    position?: { row: number; col: number; size_x: number; size_y: number },
+    position?: { row: number; col: number; size_x: number; size_y: number; tab_id?: number },
   ): Promise<MetabaseDashcard> {
     const dashboard = await this.getDashboard(dashboardId);
     const existingIds = new Set(dashboard.dashcards.map((dc) => dc.id));
@@ -855,6 +894,7 @@ export class MetabaseClient {
     const col = position?.col ?? 0;
     const size_x = position?.size_x ?? 4;
     const size_y = position?.size_y ?? 4;
+    const tabId = tabs.length > 0 ? (position?.tab_id ?? tabs[0].id) : null;
 
     let newDashcard: MetabaseDashcard | undefined;
 
@@ -887,8 +927,7 @@ export class MetabaseClient {
               parameter_mappings: [],
               visualization_settings: {},
               series: [],
-              // New card on the first tab (all existing cards stay on their current tabs)
-              dashboard_tab_id: tabs[0].id,
+              dashboard_tab_id: tabId,
             },
           ],
         }),
@@ -959,6 +998,109 @@ export class MetabaseClient {
     const dashboard = await this.getDashboard(dashboardId);
     const remaining = dashboard.dashcards.filter((dc) => dc.id !== dashcardId);
     await this.updateDashboardCards(dashboardId, remaining, dashboard.tabs ?? []);
+  }
+
+  /**
+   * Adds a virtual card (text block or heading) to a dashboard.
+   * Virtual cards have card_id: null and carry their content in visualization_settings.
+   * Uses the same PUT paths as addDashboardCard (tabbed vs tabless).
+   */
+  async addDashboardTextCard(
+    dashboardId: number,
+    text: string,
+    display: "text" | "heading",
+    position?: { row: number; col: number; size_x: number; size_y: number; tab_id?: number },
+  ): Promise<MetabaseDashcard> {
+    const dashboard = await this.getDashboard(dashboardId);
+    const existingIds = new Set(dashboard.dashcards.map((dc) => dc.id));
+    const tabs = dashboard.tabs ?? [];
+
+    const row = position?.row ?? 0;
+    const col = position?.col ?? 0;
+    const size_x = position?.size_x ?? 12;
+    const size_y = position?.size_y ?? (display === "heading" ? 1 : 2);
+    const tabId = tabs.length > 0 ? (position?.tab_id ?? tabs[0].id) : null;
+
+    const virtualCard = {
+      id: -1,
+      card_id: null,
+      row,
+      col,
+      size_x,
+      size_y,
+      visualization_settings: {
+        virtual_card: {
+          name: "",
+          display,
+          visualization_settings: {},
+          dataset_query: {},
+        },
+        text,
+      },
+      parameter_mappings: [] as MetabaseParameterMapping[],
+      dashboard_tab_id: tabId,
+    };
+
+    let newDashcard: MetabaseDashcard | undefined;
+
+    if (tabs.length > 0) {
+      const response = await this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tabs: tabs.map((t) => ({ id: t.id, name: t.name })),
+          dashcards: [
+            ...dashboard.dashcards.map((dc) => ({
+              id: dc.id,
+              card_id: dc.card_id,
+              row: dc.row,
+              col: dc.col,
+              size_x: dc.size_x,
+              size_y: dc.size_y,
+              parameter_mappings: dc.parameter_mappings,
+              visualization_settings: dc.visualization_settings ?? {},
+              series: dc.series ?? [],
+              dashboard_tab_id: dc.dashboard_tab_id ?? null,
+            })),
+            virtualCard,
+          ],
+        }),
+      });
+      newDashcard = response.dashcards.find((dc) => !existingIds.has(dc.id));
+    } else {
+      const response = await this.request<{ cards: MetabaseDashcard[] }>(
+        `/api/dashboard/${dashboardId}/cards`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cards: [
+              ...dashboard.dashcards.map((dc) => ({
+                id: dc.id,
+                card_id: dc.card_id,
+                row: dc.row,
+                col: dc.col,
+                size_x: dc.size_x,
+                size_y: dc.size_y,
+                parameter_mappings: dc.parameter_mappings,
+                visualization_settings: dc.visualization_settings ?? {},
+                series: dc.series ?? [],
+                dashboard_tab_id: null,
+                action_id: null,
+              })),
+              { ...virtualCard, action_id: null },
+            ],
+            ordered_tabs: [],
+          }),
+        },
+      );
+      newDashcard = response.cards.find((dc) => !existingIds.has(dc.id));
+    }
+
+    if (!newDashcard) {
+      throw new Error(`addDashboardTextCard: new dashcard not found in PUT response`);
+    }
+    return newDashcard;
   }
 
   /**
