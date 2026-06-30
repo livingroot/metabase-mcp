@@ -81,8 +81,14 @@ function buildTemplateTags(sql: string, tagTypes?: Record<string, string>): Reco
   for (const [, name] of sql.matchAll(/\{\{\s*([^\s}]+)\s*\}\}/g)) {
     if (seen.has(name)) continue;
     seen.add(name);
-    // Skip card/model references ({{#id-slug}}) — these need the source card's tag definition
-    if (name.startsWith("#")) continue;
+    if (name.startsWith("#")) {
+      // Card/model reference: {{#87-slug}} → type: "card" tag required by Metabase
+      const cardId = parseInt(name.slice(1), 10);
+      if (!isNaN(cardId)) {
+        tags[name] = { id: name, name, "display-name": name, type: "card", "card-id": cardId };
+      }
+      continue;
+    }
     tags[name] = {
       id: name,
       name,

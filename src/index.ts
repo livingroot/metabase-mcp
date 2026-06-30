@@ -137,10 +137,40 @@ function formatQueryResult(response: MetabaseDatasetResponse, maxRows: number): 
  * are responsible for connecting (e.g. server.connect(transport)).
  */
 export function createServer(credentials: MetabaseClientOptions = {}): McpServer {
-  const server = new McpServer({
-    name: "metabase-mcp",
-    version: "0.1.0",
-  });
+  const server = new McpServer(
+    { name: "metabase-mcp", version: "0.1.0" },
+    {
+      instructions: `
+You are working with a Metabase instance via its REST API.
+
+## Hard rules
+
+- NEVER make direct HTTP requests to Metabase. All interactions must go through the MCP tools provided by this server.
+- If a capability is not implemented as an MCP tool, stop and tell the user you cannot do it. Do not attempt workarounds or direct API calls.
+
+## Dashboard & card building tips
+
+- To create a filter with a dropdown list, use a Field Filter parameter on the card (SQL variable type "Field Filter", tag_config with field_id), not a plain Text/Number parameter. Field Filters let Metabase render a native dropdown populated from the field values.
+- \`values_source_type: card\` on a dashboard filter only works if the connected card uses a \`type: dimension\` (Field Filter) template tag. For plain \`text\`/\`number\`/\`date\` variables, Metabase silently ignores the card source and falls back to a plain text input.
+- A Field Filter is bound to exactly one physical column in one table. You cannot point a single Field Filter at a computed expression or a UNION across tables. For multi-table filtering, use separate Field Filters per table or a Metabase model (dataset) with its own fields — converting a card to a model is not yet supported by this server.
+- \`dashboards_connect_filter\` auto-detects whether to use \`target_type='dimension'\` or \`'variable'\` by reading the card's template tag. You do not need to pass \`target_type\` explicitly unless you want to override this detection.
+- Always link dashboard filter widgets to card parameters after adding them; an unlinked filter has no effect.
+- Use "question" cards (GUI-based) for simple aggregations and "native" cards for complex SQL. Mixing both on one dashboard is fine.
+- After creating or updating a card, always re-fetch its metadata before embedding it in a dashboard to get the correct parameter mappings.
+
+## Query & schema exploration
+
+- Use \`database_list\` then \`database_schema\` to discover tables before writing queries.
+- Prefer \`dataset_query\` for ad-hoc data exploration; save results as cards only when the query will be reused on a dashboard.
+- The \`{{#card_id-slug}}\` syntax (referencing another card/model) is supported in SQL. The server builds the correct \`type: card\` template tag automatically — do not inline the referenced card's SQL unless you specifically cannot use a card reference.
+
+## Error handling
+
+- If a card update fails with a 400, inspect the "errors" field in the response — it usually names the exact parameter that is malformed.
+- Metabase v0.59 does not support OpenAPI; do not attempt to fetch a schema spec.
+`.trim(),
+    },
+  );
 
   // -------------------------------------------------------------------------
   // Tool: server_ping (D-10 resource_verb naming)
@@ -1720,9 +1750,8 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
         target_type: z
           .enum(["variable", "dimension"])
           .optional()
-          .default("variable")
           .describe(
-            "Target mapping type. Use 'variable' (default) for text/date/number template tags. Use 'dimension' for tags created with tag_config field_id (dimension-type tags). Wrong type causes filter to silently have no effect.",
+            "Target mapping type. Omit to auto-detect: the tool reads the card's template tag and picks 'dimension' for Field Filter tags, 'variable' for text/date/number tags. Pass explicitly only to override auto-detection.",
           ),
       },
     },
@@ -1756,10 +1785,23 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
             ],
           };
         }
-        // Step 4: build the FULL cards array preserving ALL dashcards (Pitfall 2)
+        // Step 4: auto-detect target_type from the card's template tag when not provided
+        let resolvedTargetType = target_type ?? "variable";
+        if (target_type === undefined) {
+          try {
+            const card = await client.getCard(target.card_id!);
+            const nativeTags =
+              (card.dataset_query?.native?.["template-tags"] as Record<string, Record<string, unknown>> | undefined) ?? {};
+            if (nativeTags[tag_name]?.["type"] === "dimension") {
+              resolvedTargetType = "dimension";
+            }
+          } catch {
+            // fall back to "variable" if card fetch fails
+          }
+        }
+        // Step 5: build the FULL cards array preserving ALL dashcards (Pitfall 2)
         const fullCardsArray = dashboard.dashcards.map((dc) => {
           if (dc.id === dashcard_id) {
-            // Add the new parameter_mapping to this dashcard (native SQL target format — Pitfall 5)
             return {
               id: dc.id,
               card_id: dc.card_id,
@@ -1772,16 +1814,12 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
                 {
                   parameter_id,
                   card_id: target.card_id,
-                  // target_type controls the mapping format (Pitfall 5):
-                  //   "variable"  — for text/date/number template tags (default)
-                  //   "dimension" — for dimension tags created with tag_config field_id
-                  target: [target_type ?? "variable", ["template-tag", tag_name]],
+                  target: [resolvedTargetType, ["template-tag", tag_name]],
                 },
               ],
               ...(dc.dashboard_tab_id !== undefined ? { dashboard_tab_id: dc.dashboard_tab_id } : {}),
             };
           }
-          // Preserve every other dashcard with its existing parameter_mappings
           return {
             id: dc.id,
             card_id: dc.card_id,
@@ -1793,13 +1831,13 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
             ...(dc.dashboard_tab_id !== undefined ? { dashboard_tab_id: dc.dashboard_tab_id } : {}),
           };
         });
-        // Step 5: PUT the full cards array — preserve tabs (ordered_tabs must include current tabs)
+        // Step 6: PUT the full cards array — preserve tabs
         await client.updateDashboardCards(dashboard_id, fullCardsArray, dashboard.tabs ?? []);
         return {
           content: [
             {
               type: "text",
-              text: `Filter '${parameter_id}' connected to dashcard ${dashcard_id} via template tag '${tag_name}' (target_type=${target_type ?? "variable"}).`,
+              text: `Filter '${parameter_id}' connected to dashcard ${dashcard_id} via template tag '${tag_name}' (target_type=${resolvedTargetType}${target_type === undefined ? ", auto-detected" : ""}).`,
             },
           ],
         };
