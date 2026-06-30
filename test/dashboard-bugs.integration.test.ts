@@ -140,13 +140,16 @@ describe.runIf(process.env.INTEGRATION)("Dashboard tab & filter regression (BUG-
     dashId = parseInt(m![1], 10);
     console.error(`[bug-regression] dashId=${dashId}`);
 
-    // Add 2 tabs via raw API (negative IDs → server assigns real IDs)
-    await mbPut(`/api/dashboard/${dashId}/cards`, {
-      cards: [],
-      ordered_tabs: [
-        { id: -1, name: "Main", position: 0 },
-        { id: -2, name: "Details", position: 1 },
+    // Create 2 tabs via PUT /api/dashboard/:id with negative IDs + dashcards: [].
+    // In Metabase v0.59, tabs are managed through PUT /api/dashboard/:id, NOT
+    // through PUT /api/dashboard/:id/cards. The dashcards key must be present
+    // (even as empty array) or Metabase silently ignores the tabs field.
+    await mbPut(`/api/dashboard/${dashId}`, {
+      tabs: [
+        { id: -1, name: "Main" },
+        { id: -2, name: "Details" },
       ],
+      dashcards: [],
     });
 
     // Verify 2 tabs exist

@@ -1054,13 +1054,26 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
       try {
         const client = new MetabaseClient(credentials);
         const dashboards = await client.listDashboards(name_filter);
+        // Metabase v0.59 list items do not include dashcard_count or dashcards — card
+        // counts require a detail fetch per dashboard. Fetch in parallel (up to 20) so
+        // the list stays responsive; dashboards beyond 20 show "?" in the Cards column.
+        const DETAIL_FETCH_LIMIT = 20;
+        const toFetch = dashboards.slice(0, DETAIL_FETCH_LIMIT);
+        const details = await Promise.all(
+          toFetch.map((d) =>
+            client.getDashboard(d.id).then((detail) => ({
+              id: d.id,
+              count: (detail.dashcards ?? []).length,
+            })).catch(() => ({ id: d.id, count: 0 }))
+          )
+        );
+        const countMap = new Map(details.map((r) => [r.id, r.count]));
         const header =
           "| ID | Name | Description | Cards | Updated |\n" +
           "|----|------|-------------|-------|---------|";
         const rows = dashboards
           .map((d) => {
-            // Pitfall 6: list items may carry dashcards OR ordered_cards or neither
-            const cards = (d.dashcards ?? d.ordered_cards ?? []).length;
+            const cards = countMap.has(d.id) ? countMap.get(d.id) : "?";
             return `| ${d.id} | ${escapeMd(d.name)} | ${escapeMd(d.description ?? "—")} | ${cards} | ${escapeMd(d.updated_at)} |`;
           })
           .join("\n");
@@ -1224,7 +1237,16 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
     async ({ dashboard_id, name, description }) => {
       try {
         const client = new MetabaseClient(credentials);
-        await client.updateDashboard(dashboard_id, { name, description });
+        // Read-modify-write: fetch current state first to preserve parameters, tabs,
+        // and any other dashboard fields. PUT /api/dashboard/:id resets fields that
+        // are not included in the body — sending only {name} would wipe parameters[].
+        const current = await client.getDashboard(dashboard_id);
+        await client.updateDashboard(dashboard_id, {
+          name,
+          description,
+          parameters: current.parameters,
+          tabs: current.tabs,
+        });
         return {
           content: [{ type: "text", text: "Dashboard updated successfully." }],
         };
@@ -1523,10 +1545,14 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
         if (values_source_config !== undefined) {
           newParam["values_source_config"] = values_source_config;
         }
-        // Step 3: PUT with existing parameters preserved + new parameter appended.
+        // Step 3: PUT with existing parameters preserved, replacing any existing entry
+        // with the same parameter_id (upsert semantics). This supports editing a filter:
+        // calling dashboards_add_filter again with the same parameter_id updates it
+        // instead of creating a duplicate (which would corrupt the dashboard).
         // Send tabs too — Metabase v0.59 may wipe them if omitted from the PUT body.
+        const existingOtherParams = dashboard.parameters.filter((p) => p.id !== parameter_id);
         await client.updateDashboard(dashboard_id, {
-          parameters: [...dashboard.parameters, newParam as unknown as import("./types.js").MetabaseDashboardParameter],
+          parameters: [...existingOtherParams, newParam as unknown as import("./types.js").MetabaseDashboardParameter],
           tabs: dashboard.tabs,
         });
         const sourceNote = values_source_type
@@ -1557,7 +1583,7 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
   server.registerTool(
     "dashboards_connect_filter",
     {
-      description: "Wire a dashboard filter parameter to a native SQL card's template tag so the filter affects that card's results. The parameter_id must match one added via dashboards_add_filter; tag_name is the {{tag_name}} variable in the card's SQL.",
+      description: "Wire a dashboard filter parameter to a native SQL card's template tag so the filter affects that card's results. The parameter_id must match one added via dashboards_add_filter; tag_name is the {{tag_name}} variable in the card's SQL. For text/date/number tags (type='text'|'date'|'number'), use target_type='variable' (default). For dimension tags created with tag_config field_id, use target_type='dimension'.",
       inputSchema: {
         dashboard_id: z.number().int().positive().describe("Dashboard ID"),
         dashcard_id: z
@@ -1577,9 +1603,16 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           .describe(
             "The SQL template-tag variable name (the {{tag_name}} in the card's native SQL)",
           ),
+        target_type: z
+          .enum(["variable", "dimension"])
+          .optional()
+          .default("variable")
+          .describe(
+            "Target mapping type. Use 'variable' (default) for text/date/number template tags. Use 'dimension' for tags created with tag_config field_id (dimension-type tags). Wrong type causes filter to silently have no effect.",
+          ),
       },
     },
-    async ({ dashboard_id, dashcard_id, parameter_id, tag_name }) => {
+    async ({ dashboard_id, dashcard_id, parameter_id, tag_name, target_type }) => {
       try {
         const client = new MetabaseClient(credentials);
         // Step 1: fetch current dashboard state (read-modify-write pattern)
@@ -1625,7 +1658,10 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
                 {
                   parameter_id,
                   card_id: target.card_id,
-                  target: ["variable", ["template-tag", tag_name]],
+                  // target_type controls the mapping format (Pitfall 5):
+                  //   "variable"  — for text/date/number template tags (default)
+                  //   "dimension" — for dimension tags created with tag_config field_id
+                  target: [target_type ?? "variable", ["template-tag", tag_name]],
                 },
               ],
               ...(dc.dashboard_tab_id !== undefined ? { dashboard_tab_id: dc.dashboard_tab_id } : {}),
@@ -1649,7 +1685,7 @@ export function createServer(credentials: MetabaseClientOptions = {}): McpServer
           content: [
             {
               type: "text",
-              text: `Filter '${parameter_id}' connected to dashcard ${dashcard_id} via template tag '${tag_name}'.`,
+              text: `Filter '${parameter_id}' connected to dashcard ${dashcard_id} via template tag '${tag_name}' (target_type=${target_type ?? "variable"}).`,
             },
           ],
         };

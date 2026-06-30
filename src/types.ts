@@ -187,8 +187,10 @@ export interface MetabaseParameterMapping {
  *
  * Simpler than the full MetabaseDashboard detail shape — list items may not
  * include the complete dashcards array. Card count must be derived defensively:
- *   (d.dashcards ?? d.ordered_cards ?? []).length
+ *   d.dashcard_count ?? (d.dashcards ?? d.ordered_cards ?? []).length
  * because Metabase has used both field names across versions (Pitfall 6).
+ * Metabase v0.59 returns a dedicated `dashcard_count` integer field on list items
+ * instead of embedding the full dashcards array, so prefer that when present.
  *
  * Both dashcards and ordered_cards are optional because the list endpoint
  * response shape is not guaranteed to include either field.
@@ -200,6 +202,11 @@ export interface MetabaseDashboardListItem {
   updated_at: string;
   created_at: string;
   archived: boolean;
+  /**
+   * Number of cards on this dashboard — present on list items in Metabase v0.59.
+   * Prefer this over computing .length on the dashcards array (which may be absent).
+   */
+  dashcard_count?: number;
   /** Cards placed on this dashboard (may be absent on list items). */
   dashcards?: MetabaseDashcard[];
   /** Alternate field name used in some Metabase versions — see Pitfall 6. */

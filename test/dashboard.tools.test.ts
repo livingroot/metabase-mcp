@@ -25,40 +25,31 @@ import { createServer } from "../src/index.js";
 // Seed data
 // ---------------------------------------------------------------------------
 
+// Metabase v0.59 list items — no dashcard_count, no dashcards array (actual v0.59 shape)
 const SEED_DASHBOARD_LIST = [
-  {
-    id: 1,
-    name: "Sales Overview",
-    description: "Q3 sales",
-    updated_at: "2026-06-01T12:00:00Z",
-    created_at: "2026-01-01T00:00:00Z",
-    archived: false,
-    dashcards: [
-      { id: 11, card_id: 101, dashboard_id: 1, row: 0, col: 0, size_x: 12, size_y: 8, parameter_mappings: [] },
-      { id: 12, card_id: 102, dashboard_id: 1, row: 8, col: 0, size_x: 12, size_y: 8, parameter_mappings: [] },
-    ],
-  },
-  {
-    id: 2,
-    name: "Marketing Funnel",
-    description: null,
-    updated_at: "2026-06-10T08:30:00Z",
-    created_at: "2026-02-01T00:00:00Z",
-    archived: false,
-    dashcards: [],
-  },
-  {
-    id: 3,
-    name: "Ops Metrics",
-    description: "daily ops",
-    updated_at: "2026-06-15T14:00:00Z",
-    created_at: "2026-03-01T00:00:00Z",
-    archived: false,
-    dashcards: [
-      { id: 31, card_id: 301, dashboard_id: 3, row: 0, col: 0, size_x: 6, size_y: 4, parameter_mappings: [] },
-    ],
-  },
+  { id: 1, name: "Sales Overview", description: "Q3 sales", updated_at: "2026-06-01T12:00:00Z", created_at: "2026-01-01T00:00:00Z", archived: false },
+  { id: 2, name: "Marketing Funnel", description: null, updated_at: "2026-06-10T08:30:00Z", created_at: "2026-02-01T00:00:00Z", archived: false },
+  { id: 3, name: "Ops Metrics", description: "daily ops", updated_at: "2026-06-15T14:00:00Z", created_at: "2026-03-01T00:00:00Z", archived: false },
 ];
+
+// Detail responses (GET /api/dashboard/:id) with real dashcards arrays
+const SEED_DASHBOARD_DETAIL_1 = {
+  id: 1, name: "Sales Overview", description: "Q3 sales", parameters: [], updated_at: "2026-06-01T12:00:00Z",
+  dashcards: [
+    { id: 11, card_id: 101, dashboard_id: 1, row: 0, col: 0, size_x: 12, size_y: 8, parameter_mappings: [] },
+    { id: 12, card_id: 102, dashboard_id: 1, row: 8, col: 0, size_x: 12, size_y: 8, parameter_mappings: [] },
+  ],
+};
+const SEED_DASHBOARD_DETAIL_2 = {
+  id: 2, name: "Marketing Funnel", description: null, parameters: [], updated_at: "2026-06-10T08:30:00Z",
+  dashcards: [],
+};
+const SEED_DASHBOARD_DETAIL_3 = {
+  id: 3, name: "Ops Metrics", description: "daily ops", parameters: [], updated_at: "2026-06-15T14:00:00Z",
+  dashcards: [
+    { id: 31, card_id: 301, dashboard_id: 3, row: 0, col: 0, size_x: 6, size_y: 4, parameter_mappings: [] },
+  ],
+};
 
 const SEED_DASHBOARD_DETAIL = {
   id: 1,
@@ -74,6 +65,18 @@ const SEED_DASHBOARD_DETAIL = {
     { id: 12, card_id: 102, dashboard_id: 1, row: 8, col: 0, size_x: 12, size_y: 8, parameter_mappings: [] },
   ],
 };
+
+/** URL-routed mock for dashboards_list: list endpoint + per-dashboard detail endpoints */
+function makeDashboardListFetchMock(listItems = SEED_DASHBOARD_LIST): typeof fetch {
+  return makeUrlFetchMock([
+    // Detail routes matched before the list route (more specific first)
+    ["/api/dashboard/1", 200, SEED_DASHBOARD_DETAIL_1],
+    ["/api/dashboard/2", 200, SEED_DASHBOARD_DETAIL_2],
+    ["/api/dashboard/3", 200, SEED_DASHBOARD_DETAIL_3],
+    // Generic list route
+    ["/api/dashboard", 200, listItems],
+  ]);
+}
 
 const SEED_DASHBOARD_CREATED = {
   id: 42,
@@ -126,6 +129,34 @@ function makeSequentialFetchMock(calls: Array<[number, unknown]>): typeof fetch 
     } as unknown as Response);
   }
   return mockFn as unknown as typeof fetch;
+}
+
+/**
+ * URL-routed fetch mock: matches URL substrings to [status, body] pairs.
+ * dashboards_list now makes N+1 calls (list + detail per dashboard), so tests
+ * use this to return different bodies for the list vs detail endpoints.
+ */
+function makeUrlFetchMock(routes: Array<[string, number, unknown]>): typeof fetch {
+  return vi.fn().mockImplementation(async (url: string) => {
+    for (const [pattern, status, body] of routes) {
+      if (url.includes(pattern)) {
+        return {
+          ok: status >= 200 && status < 300,
+          status,
+          statusText: status === 200 ? "OK" : "Error",
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(JSON.stringify(body)),
+        } as unknown as Response;
+      }
+    }
+    return {
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+      json: () => Promise.resolve({}),
+      text: () => Promise.resolve(""),
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +221,8 @@ describe("MCP dashboard tools", () => {
 
   describe("dashboards_list", () => {
     it("returns a Markdown table with ID, name, description, card count, and updated date", async () => {
-      vi.stubGlobal("fetch", makeFetchMock(200, SEED_DASHBOARD_LIST));
+      // dashboards_list makes N+1 calls: GET /api/dashboard then GET /api/dashboard/:id per item
+      vi.stubGlobal("fetch", makeDashboardListFetchMock());
 
       const res = await client.callTool({
         name: "dashboards_list",
@@ -199,25 +231,23 @@ describe("MCP dashboard tools", () => {
 
       expect(res.isError).toBeFalsy();
       const text = (res.content[0] as { type: string; text: string }).text;
-      // Header columns
       expect(text).toContain("ID");
       expect(text).toContain("Name");
       expect(text).toContain("Description");
       expect(text).toContain("Cards");
       expect(text).toContain("Updated");
-      // Sales Overview: 2 dashcards
+      // Sales Overview: 2 dashcards from detail
       expect(text).toContain("Sales Overview");
       expect(text).toContain("2");
       // Marketing Funnel: 0 dashcards
       expect(text).toContain("Marketing Funnel");
-      expect(text).toContain("0");
       // Ops Metrics: 1 dashcard
       expect(text).toContain("Ops Metrics");
       expect(text).toContain("1");
     });
 
     it("empty array result renders the header row and separator only (no data rows)", async () => {
-      vi.stubGlobal("fetch", makeFetchMock(200, []));
+      vi.stubGlobal("fetch", makeUrlFetchMock([["/api/dashboard", 200, []]]));
 
       const res = await client.callTool({
         name: "dashboards_list",
@@ -231,8 +261,7 @@ describe("MCP dashboard tools", () => {
     });
 
     it("name_filter 'Sales' includes 'Sales Overview' and excludes 'Marketing Funnel'", async () => {
-      // Mock returns the full array; client-side filter narrows
-      vi.stubGlobal("fetch", makeFetchMock(200, SEED_DASHBOARD_LIST));
+      vi.stubGlobal("fetch", makeDashboardListFetchMock());
 
       const res = await client.callTool({
         name: "dashboards_list",
@@ -246,7 +275,7 @@ describe("MCP dashboard tools", () => {
     });
 
     it("name_filter 'zzznomatch' renders header only", async () => {
-      vi.stubGlobal("fetch", makeFetchMock(200, SEED_DASHBOARD_LIST));
+      vi.stubGlobal("fetch", makeDashboardListFetchMock());
 
       const res = await client.callTool({
         name: "dashboards_list",
@@ -261,7 +290,7 @@ describe("MCP dashboard tools", () => {
     });
 
     it("returns isError: true on a non-2xx API response and does not leak the API key", async () => {
-      vi.stubGlobal("fetch", makeFetchMock(500, { message: "Internal Server Error" }));
+      vi.stubGlobal("fetch", makeUrlFetchMock([["/api/dashboard", 500, { message: "Internal Server Error" }]]));
 
       const res = await client.callTool({
         name: "dashboards_list",
@@ -272,6 +301,25 @@ describe("MCP dashboard tools", () => {
       const text = (res.content[0] as { type: string; text: string }).text;
       expect(text).toContain("dashboards_list");
       expect(text).not.toContain("test-key-dashboard-tools");
+    });
+
+    it("[BUG-1] v0.59 list items with no card count fields: detail fetches return real counts", async () => {
+      // Regression: Metabase v0.59 list items carry no dashcard_count or dashcards.
+      // dashboards_list must fetch /api/dashboard/:id for each item to get real counts.
+      vi.stubGlobal("fetch", makeDashboardListFetchMock());
+
+      const res = await client.callTool({
+        name: "dashboards_list",
+        arguments: {},
+      });
+
+      expect(res.isError).toBeFalsy();
+      const text = (res.content[0] as { type: string; text: string }).text;
+      // Counts come from detail responses: id=1 → 2 cards, id=2 → 0, id=3 → 1
+      expect(text).toContain("Sales Overview");
+      expect(text).toContain("2");
+      expect(text).toContain("Ops Metrics");
+      expect(text).toContain("1");
     });
   });
 
@@ -383,8 +431,14 @@ describe("MCP dashboard tools", () => {
   // -------------------------------------------------------------------------
 
   describe("dashboards_update", () => {
-    it("with only name provided, calls PUT to /api/dashboard/:id and body contains name but NOT description", async () => {
-      const mockFetch = makeFetchMock(200, { ...SEED_DASHBOARD_DETAIL, name: "Renamed Dashboard" });
+    it("with only name provided, first GETs current state then PUTs with name (preserving existing parameters)", async () => {
+      // dashboards_update now does read-modify-write to preserve parameters/tabs.
+      // Call 1: GET /api/dashboard/1 (fetch current state)
+      // Call 2: PUT /api/dashboard/1 (update with name + preserved parameters)
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, { ...SEED_DASHBOARD_DETAIL, name: "Renamed Dashboard" }],
+      ]);
       vi.stubGlobal("fetch", mockFetch);
 
       await client.callTool({
@@ -393,18 +447,28 @@ describe("MCP dashboard tools", () => {
       });
 
       const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
-      expect(calls.length).toBeGreaterThanOrEqual(1);
-      const url = calls[0][0] as string;
-      expect(url).toMatch(/\/api\/dashboard\/1$/);
-      const init = calls[0][1] as RequestInit;
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      // First call: GET to fetch current state
+      const getUrl = calls[0][0] as string;
+      expect(getUrl).toMatch(/\/api\/dashboard\/1$/);
+      // Second call: PUT with name and preserved parameters
+      const putUrl = calls[1][0] as string;
+      expect(putUrl).toMatch(/\/api\/dashboard\/1$/);
+      const init = calls[1][1] as RequestInit;
       expect(init.method).toBe("PUT");
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       expect(body["name"]).toBe("Renamed Dashboard");
       expect(body["description"]).toBeUndefined();
+      // parameters must be preserved from current state (read-modify-write)
+      expect(Array.isArray(body["parameters"])).toBe(true);
     });
 
     it("returns a confirmation message containing 'updated'", async () => {
-      vi.stubGlobal("fetch", makeFetchMock(200, SEED_DASHBOARD_DETAIL));
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, SEED_DASHBOARD_DETAIL],
+      ]);
+      vi.stubGlobal("fetch", mockFetch);
 
       const res = await client.callTool({
         name: "dashboards_update",
@@ -691,6 +755,38 @@ describe("MCP dashboard tools", () => {
       const text = (res.content[0] as { type: string; text: string }).text;
       expect(text).toContain("p_region");
     });
+
+    it("[BUG-4] calling with same parameter_id replaces existing parameter (upsert, not duplicate)", async () => {
+      // Regression test for BUG-4: dashboards_add_filter must replace an existing
+      // parameter with the same id rather than appending a duplicate.
+      // SEED_DASHBOARD_DETAIL already has parameter p_status.
+      // Calling again with p_status and different name/type must produce ONE entry.
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, {}],
+      ]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      await client.callTool({
+        name: "dashboards_add_filter",
+        arguments: {
+          dashboard_id: 1,
+          parameter_id: "p_status",   // same id as existing param in SEED_DASHBOARD_DETAIL
+          name: "Status (Updated)",
+          type: "string/=",
+        },
+      });
+
+      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
+      const putInit = calls[1][1] as RequestInit;
+      const putBody = JSON.parse(putInit.body as string) as {
+        parameters: Array<{ id: string; name: string }>;
+      };
+      // Must be exactly 1 entry with id=p_status (replaced, not duplicated)
+      const statusParams = putBody.parameters.filter((p) => p.id === "p_status");
+      expect(statusParams.length).toBe(1);
+      expect(statusParams[0].name).toBe("Status (Updated)");
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -770,6 +866,73 @@ describe("MCP dashboard tools", () => {
       const otherCard = putBody.cards.find((c) => c.id === 12);
       expect(otherCard).toBeDefined();
       expect(Array.isArray(otherCard!.parameter_mappings)).toBe(true);
+    });
+
+    it("[BUG-2] target_type=dimension generates ['dimension', ['template-tag', tag_name]] target", async () => {
+      // Regression test for BUG-2: dimension-type tags (created with tag_config field_id)
+      // require target: ['dimension', ['template-tag', tag_name]], not 'variable'.
+      // Using 'variable' for a dimension tag silently fails to wire the filter.
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, {}],
+      ]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      await client.callTool({
+        name: "dashboards_connect_filter",
+        arguments: {
+          dashboard_id: 1,
+          dashcard_id: 11,
+          parameter_id: "p_status",
+          tag_name: "status",
+          target_type: "dimension",
+        },
+      });
+
+      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
+      const putInit = calls[1][1] as RequestInit;
+      const putBody = JSON.parse(putInit.body as string) as {
+        cards: Array<{
+          id: number;
+          parameter_mappings: Array<{ parameter_id: string; target: unknown }>;
+        }>;
+      };
+      const targetCard = putBody.cards.find((c) => c.id === 11);
+      expect(targetCard).toBeDefined();
+      const mapping = targetCard!.parameter_mappings[0];
+      expect(mapping.target).toEqual(["dimension", ["template-tag", "status"]]);
+    });
+
+    it("[BUG-2] default target_type (variable) still generates ['variable', ['template-tag', tag_name]] target", async () => {
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, {}],
+      ]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      await client.callTool({
+        name: "dashboards_connect_filter",
+        arguments: {
+          dashboard_id: 1,
+          dashcard_id: 11,
+          parameter_id: "p_status",
+          tag_name: "status",
+          // target_type omitted — defaults to 'variable'
+        },
+      });
+
+      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
+      const putInit = calls[1][1] as RequestInit;
+      const putBody = JSON.parse(putInit.body as string) as {
+        cards: Array<{
+          id: number;
+          parameter_mappings: Array<{ parameter_id: string; target: unknown }>;
+        }>;
+      };
+      const targetCard = putBody.cards.find((c) => c.id === 11);
+      expect(targetCard).toBeDefined();
+      const mapping = targetCard!.parameter_mappings[0];
+      expect(mapping.target).toEqual(["variable", ["template-tag", "status"]]);
     });
   });
 });

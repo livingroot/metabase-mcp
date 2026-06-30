@@ -744,16 +744,24 @@ export class MetabaseClient {
 
   /**
    * Replaces the full set of dashcards on a dashboard.
-   * Calls PUT /api/dashboard/:id/cards with Content-Type: application/json.
    *
-   * IMPORTANT — this PUT is a FULL REPLACEMENT: ALL existing dashcards must be
-   * included in the `cards` array. Omitting a dashcard removes it from the
-   * dashboard silently (Pitfall 2). Body field names are snake_case, NOT
-   * camelCase (Pitfall 3). ordered_tabs MUST be present as [] when no tabs
-   * exist (Pattern 5).
+   * Two paths depending on whether the dashboard has tabs:
    *
-   * Returns void (response body is not consumed).
-   * Throws MetabaseApiError on non-2xx responses.
+   * TABBED (orderedTabs.length > 0):
+   *   Uses PUT /api/dashboard/:id with existing positive tab IDs and dashcard IDs.
+   *   This endpoint preserves both tab IDs and dashcard IDs in place — safe for
+   *   parameter_mappings updates, repositions, and removal. Avoids PUT /cards which
+   *   wipes tabs and DELETE+re-INSERTs all dashcards (causing ID churn and FK
+   *   violations when tab IDs are referenced).
+   *
+   * TABLESS (orderedTabs.length === 0):
+   *   Uses PUT /api/dashboard/:id/cards which is an upsert-by-ID when no tabs
+   *   exist. dashboard_tab_id must be null (no tabs to reference).
+   *
+   * IMPORTANT — FULL REPLACEMENT in both paths: ALL existing dashcards must be
+   * included in the `cards` array. Omitting a dashcard removes it silently (Pitfall 2).
+   *
+   * Returns void. Throws MetabaseApiError on non-2xx.
    */
   async updateDashboardCards(
     dashboardId: number,
@@ -772,43 +780,65 @@ export class MetabaseClient {
     }>,
     orderedTabs: MetabaseDashboardTab[] = [],
   ): Promise<void> {
-    await this.request<unknown>(`/api/dashboard/${dashboardId}/cards`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cards: cards.map((c) => ({
-          id: c.id,
-          card_id: c.card_id,
-          row: c.row,
-          col: c.col,
-          size_x: c.size_x,
-          size_y: c.size_y,
-          parameter_mappings: c.parameter_mappings,
-          visualization_settings: c.visualization_settings ?? {},
-          series: c.series ?? [],
-          dashboard_tab_id: c.dashboard_tab_id ?? null,
-          action_id: c.action_id ?? null,
-        })),
-        ordered_tabs: orderedTabs,
-      }),
-    });
+    if (orderedTabs.length > 0) {
+      await this.request<unknown>(`/api/dashboard/${dashboardId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tabs: orderedTabs.map((t) => ({ id: t.id, name: t.name })),
+          dashcards: cards.map((c) => ({
+            id: c.id,
+            card_id: c.card_id,
+            row: c.row,
+            col: c.col,
+            size_x: c.size_x,
+            size_y: c.size_y,
+            parameter_mappings: c.parameter_mappings,
+            visualization_settings: c.visualization_settings ?? {},
+            series: c.series ?? [],
+            dashboard_tab_id: c.dashboard_tab_id ?? null,
+          })),
+        }),
+      });
+    } else {
+      await this.request<unknown>(`/api/dashboard/${dashboardId}/cards`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cards: cards.map((c) => ({
+            id: c.id,
+            card_id: c.card_id,
+            row: c.row,
+            col: c.col,
+            size_x: c.size_x,
+            size_y: c.size_y,
+            parameter_mappings: c.parameter_mappings,
+            visualization_settings: c.visualization_settings ?? {},
+            series: c.series ?? [],
+            dashboard_tab_id: null,
+            action_id: c.action_id ?? null,
+          })),
+          ordered_tabs: [],
+        }),
+      });
+    }
   }
 
   /**
    * Adds an existing saved question to a dashboard.
    *
-   * Metabase v0.59 removed POST /api/dashboard/:id/cards. The only write path
-   * is now PUT /api/dashboard/:id/cards with the FULL replacement array. This
-   * method:
-   *   1. GETs the current dashboard to collect existing dashcards.
-   *   2. PUTs all existing cards + the new card (id: -1 is the placeholder for
-   *      a new dashcard that the server will assign a real ID to).
-   *   3. Finds the new dashcard in the response by its absence from the pre-PUT
-   *      ID set.
+   * Two paths depending on whether the dashboard has tabs:
    *
-   * Returns the created MetabaseDashcard which contains the dashcard placement
-   * `id` — this is different from the saved question's `card_id` (Pitfall 1).
-   * The dashcard `id` is required for remove/reposition/filter-connect operations.
+   * TABBED: Uses PUT /api/dashboard/:id with existing positive tab IDs. This
+   *   preserves all tab IDs and dashcard IDs. The new card uses id: -1 as a
+   *   server-side placeholder and gets a fresh positive ID. Existing dashcards
+   *   keep their IDs throughout.
+   *
+   * TABLESS: Uses PUT /api/dashboard/:id/cards. The new card uses id: -1.
+   *   Existing dashcards keep their IDs (PUT /cards is an upsert when no tabs).
+   *
+   * Returns the created MetabaseDashcard containing the dashcard placement
+   * `id` — different from the saved question's `card_id` (Pitfall 1).
    *
    * Throws MetabaseApiError on non-2xx responses.
    */
@@ -819,52 +849,91 @@ export class MetabaseClient {
   ): Promise<MetabaseDashcard> {
     const dashboard = await this.getDashboard(dashboardId);
     const existingIds = new Set(dashboard.dashcards.map((dc) => dc.id));
+    const tabs = dashboard.tabs ?? [];
 
     const row = position?.row ?? 0;
     const col = position?.col ?? 0;
     const size_x = position?.size_x ?? 4;
     const size_y = position?.size_y ?? 4;
 
-    const allCards = [
-      ...dashboard.dashcards.map((dc) => ({
-        id: dc.id,
-        card_id: dc.card_id,
-        row: dc.row,
-        col: dc.col,
-        size_x: dc.size_x,
-        size_y: dc.size_y,
-        parameter_mappings: dc.parameter_mappings,
-        visualization_settings: dc.visualization_settings ?? {},
-        series: dc.series ?? [],
-        dashboard_tab_id: dc.dashboard_tab_id ?? null,
-        action_id: null,
-      })),
-      {
-        id: -1,
-        card_id: cardId,
-        row,
-        col,
-        size_x,
-        size_y,
-        parameter_mappings: [],
-        visualization_settings: {},
-        series: [],
-        dashboard_tab_id: null,
-        action_id: null,
-      },
-    ];
+    let newDashcard: MetabaseDashcard | undefined;
 
-    const response = await this.request<{ cards: MetabaseDashcard[] }>(
-      `/api/dashboard/${dashboardId}/cards`,
-      {
+    if (tabs.length > 0) {
+      const response = await this.request<MetabaseDashboard>(`/api/dashboard/${dashboardId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cards: allCards, ordered_tabs: dashboard.tabs ?? [] }),
-      },
-    );
+        body: JSON.stringify({
+          tabs: tabs.map((t) => ({ id: t.id, name: t.name })),
+          dashcards: [
+            ...dashboard.dashcards.map((dc) => ({
+              id: dc.id,
+              card_id: dc.card_id,
+              row: dc.row,
+              col: dc.col,
+              size_x: dc.size_x,
+              size_y: dc.size_y,
+              parameter_mappings: dc.parameter_mappings,
+              visualization_settings: dc.visualization_settings ?? {},
+              series: dc.series ?? [],
+              dashboard_tab_id: dc.dashboard_tab_id ?? null,
+            })),
+            {
+              id: -1,
+              card_id: cardId,
+              row,
+              col,
+              size_x,
+              size_y,
+              parameter_mappings: [],
+              visualization_settings: {},
+              series: [],
+              // New card on the first tab (all existing cards stay on their current tabs)
+              dashboard_tab_id: tabs[0].id,
+            },
+          ],
+        }),
+      });
+      newDashcard = response.dashcards.find((dc) => !existingIds.has(dc.id));
+    } else {
+      const allCards = [
+        ...dashboard.dashcards.map((dc) => ({
+          id: dc.id,
+          card_id: dc.card_id,
+          row: dc.row,
+          col: dc.col,
+          size_x: dc.size_x,
+          size_y: dc.size_y,
+          parameter_mappings: dc.parameter_mappings,
+          visualization_settings: dc.visualization_settings ?? {},
+          series: dc.series ?? [],
+          dashboard_tab_id: null,
+          action_id: null,
+        })),
+        {
+          id: -1,
+          card_id: cardId,
+          row,
+          col,
+          size_x,
+          size_y,
+          parameter_mappings: [] as MetabaseParameterMapping[],
+          visualization_settings: {},
+          series: [],
+          dashboard_tab_id: null,
+          action_id: null,
+        },
+      ];
+      const response = await this.request<{ cards: MetabaseDashcard[] }>(
+        `/api/dashboard/${dashboardId}/cards`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cards: allCards, ordered_tabs: [] }),
+        },
+      );
+      newDashcard = response.cards.find((dc) => !existingIds.has(dc.id));
+    }
 
-    // The new dashcard has a positive server-assigned ID not present before PUT
-    const newDashcard = response.cards.find((dc) => !existingIds.has(dc.id));
     if (!newDashcard) {
       throw new Error(
         `dashboards_add_card: new dashcard for card_id=${cardId} not found in PUT response`,
