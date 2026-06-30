@@ -13,8 +13,11 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
-import { MetabaseClient, MetabaseApiError } from "./client.js";
+import { MetabaseClient, MetabaseApiError, type MetabaseClientOptions } from "./client.js";
 import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseCard } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -54,11 +57,11 @@ function formatDatabaseSchema(db: MetabaseDatabaseMetadata): string {
     lines.push(
       `### Table: ${escapeMd(table.name)} (id=${table.id}, schema=${escapeMd(table.schema ?? "default")}, ${rowCount})`,
     );
-    lines.push("| Column | Display Name | Type | Semantic Type | Required |");
-    lines.push("|--------|-------------|------|---------------|---------|");
+    lines.push("| Field ID | Column | Display Name | Type | Semantic Type | Required |");
+    lines.push("|----------|--------|-------------|------|---------------|---------|");
     for (const field of table.fields) {
       lines.push(
-        `| ${escapeMd(field.name)} | ${escapeMd(field.display_name)} | ${escapeMd(field.base_type)} | ${escapeMd(field.semantic_type ?? "—")} | ${field.database_required ? "yes" : "no"} |`,
+        `| ${field.id} | ${escapeMd(field.name)} | ${escapeMd(field.display_name)} | ${escapeMd(field.base_type)} | ${escapeMd(field.semantic_type ?? "—")} | ${field.database_required ? "yes" : "no"} |`,
       );
     }
     lines.push("");
@@ -133,7 +136,7 @@ function formatQueryResult(response: MetabaseDatasetResponse, maxRows: number): 
  * Does NOT connect the server to any transport — callers (including tests)
  * are responsible for connecting (e.g. server.connect(transport)).
  */
-export function createServer(): McpServer {
+export function createServer(credentials: MetabaseClientOptions = {}): McpServer {
   const server = new McpServer({
     name: "metabase-mcp",
     version: "0.1.0",
@@ -182,7 +185,7 @@ export function createServer(): McpServer {
     { description: "List all databases connected to this Metabase instance. Returns ID, name, engine type, and sync status as a Markdown table." },
     async () => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const result = await client.listDatabases();
         // Normalise both response shapes: bare array or { data: MetabaseDatabase[] } envelope
         const dbs: MetabaseDatabase[] = Array.isArray(result)
@@ -224,7 +227,7 @@ export function createServer(): McpServer {
     },
     async ({ database_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const db = await client.getDatabaseMetadata(database_id);
         const text = formatDatabaseSchema(db);
         return { content: [{ type: "text", text }] };
@@ -257,7 +260,7 @@ export function createServer(): McpServer {
     },
     async ({ database_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const db = await client.getDatabaseMetadata(database_id);
         const header = "| ID | Name | Schema | Est. Rows |\n|----|------|--------|-----------|\n";
         const rows = db.tables
@@ -301,7 +304,7 @@ export function createServer(): McpServer {
     },
     async ({ table_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const table: MetabaseTableQueryMetadata = await client.getTableQueryMetadata(table_id);
         const rowCount =
           table.estimated_row_count != null
@@ -309,12 +312,12 @@ export function createServer(): McpServer {
             : "row count unknown";
         const heading = `## Table: ${escapeMd(table.name)} (id=${table.id}, schema=${escapeMd(table.schema ?? "default")}, ${rowCount})\n`;
         const header =
-          "| Column | Display Name | Type | Semantic Type | Required | Visibility |\n" +
-          "|--------|--------------|------|---------------|----------|------------|\n";
+          "| Field ID | Column | Display Name | Type | Semantic Type | Required | Visibility |\n" +
+          "|----------|--------|--------------|------|---------------|----------|------------|\n";
         const rows = table.fields
           .map(
             (f) =>
-              `| ${escapeMd(f.name)} | ${escapeMd(f.display_name)} | ${escapeMd(f.base_type)} | ${escapeMd(f.semantic_type ?? "—")} | ${f.database_required ? "yes" : "no"} | ${escapeMd(f.visibility_type)} |`,
+              `| ${f.id} | ${escapeMd(f.name)} | ${escapeMd(f.display_name)} | ${escapeMd(f.base_type)} | ${escapeMd(f.semantic_type ?? "—")} | ${f.database_required ? "yes" : "no"} | ${escapeMd(f.visibility_type)} |`,
           )
           .join("\n");
         const text = `${heading}${header}${rows}`;
@@ -356,7 +359,7 @@ export function createServer(): McpServer {
     },
     async ({ field_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const field: MetabaseField = await client.getField(field_id);
 
         // Log the observed has_field_values sentinel to stderr for debugging (A3).
@@ -460,7 +463,7 @@ export function createServer(): McpServer {
     },
     async ({ database_id, sql, max_rows, parameters }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const response = await client.executeSQL(database_id, sql, parameters);
         // Guard for Metabase query failures (bad SQL, missing table, permission denied)
         if (response.status === "failed") {
@@ -535,7 +538,7 @@ export function createServer(): McpServer {
     },
     async ({ card_id, max_rows, parameters }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const response = await client.executeCard(card_id, parameters);
         // T-03-06: Guard for MBQL / unsupported card types where data.cols may be absent
         if (response.data?.cols === undefined) {
@@ -616,7 +619,7 @@ export function createServer(): McpServer {
     },
     async ({ database_id, sql, parameters }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const csv = await client.exportCSV(database_id, sql, parameters);
         return { content: [{ type: "text", text: csv }] };
       } catch (err) {
@@ -655,7 +658,7 @@ export function createServer(): McpServer {
     },
     async ({ name_filter }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const cards = await client.listCards(name_filter);
         const header =
           "| ID | Name | Description | Database ID | Creator | Updated |\n" +
@@ -697,7 +700,7 @@ export function createServer(): McpServer {
     },
     async ({ name }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const cards = await client.listCards(name);
         if (cards.length === 0) {
           return { content: [{ type: "text", text: `No cards found matching "${name}".` }] };
@@ -764,7 +767,7 @@ export function createServer(): McpServer {
     },
     async ({ card_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const card: MetabaseCard = await client.getCard(card_id);
         const lines: string[] = [
           `## ${escapeMd(card.name)} (id=${card.id})`,
@@ -862,7 +865,7 @@ export function createServer(): McpServer {
     },
     async ({ database_id, sql, name, description, tag_types, tag_configs }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const created = await client.createCard(database_id, sql, name, description, tag_types, tag_configs);
         return {
           content: [{ type: "text", text: `Card created successfully. Card ID: ${created.id}` }],
@@ -965,7 +968,7 @@ export function createServer(): McpServer {
         };
       }
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         await client.updateCard(card_id, { name, description, sql, databaseId: database_id, refCardId: ref_card_id, tagTypes: tag_types, tagConfigs: tag_configs, display, visualizationSettings: visualization_settings });
         return {
           content: [{ type: "text", text: "Card updated successfully." }],
@@ -1006,7 +1009,7 @@ export function createServer(): McpServer {
     },
     async ({ card_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         await client.deleteCard(card_id);
         return {
           content: [{ type: "text", text: "Card deleted successfully." }],
@@ -1049,7 +1052,7 @@ export function createServer(): McpServer {
     },
     async ({ name_filter }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const dashboards = await client.listDashboards(name_filter);
         const header =
           "| ID | Name | Description | Cards | Updated |\n" +
@@ -1103,7 +1106,7 @@ export function createServer(): McpServer {
     },
     async ({ dashboard_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const dashboard = await client.getDashboard(dashboard_id);
 
         const lines: string[] = [
@@ -1177,7 +1180,7 @@ export function createServer(): McpServer {
     },
     async ({ name, description }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const created = await client.createDashboard(name, description);
         return {
           content: [{ type: "text", text: `Dashboard created successfully. Dashboard ID: ${created.id}` }],
@@ -1220,7 +1223,7 @@ export function createServer(): McpServer {
     },
     async ({ dashboard_id, name, description }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         await client.updateDashboard(dashboard_id, { name, description });
         return {
           content: [{ type: "text", text: "Dashboard updated successfully." }],
@@ -1259,7 +1262,7 @@ export function createServer(): McpServer {
     },
     async ({ dashboard_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         await client.deleteDashboard(dashboard_id);
         return {
           content: [{ type: "text", text: "Dashboard deleted successfully." }],
@@ -1305,7 +1308,7 @@ export function createServer(): McpServer {
     },
     async ({ dashboard_id, card_id, row, col, size_x, size_y }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         const dashcard = await client.addDashboardCard(dashboard_id, card_id, {
           row: row ?? 0,
           col: col ?? 0,
@@ -1357,7 +1360,7 @@ export function createServer(): McpServer {
     },
     async ({ dashboard_id, dashcard_id }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         await client.removeDashboardCard(dashboard_id, dashcard_id);
         return {
           content: [{ type: "text", text: "Card removed from dashboard." }],
@@ -1404,7 +1407,7 @@ export function createServer(): McpServer {
     },
     async ({ dashboard_id, dashcard_id, row, col, size_x, size_y }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         // Step 1: fetch current dashboard state (read-modify-write — Pitfall 2)
         const dashboard = await client.getDashboard(dashboard_id);
         // Step 2: locate the target dashcard
@@ -1455,7 +1458,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "dashboards_add_filter",
     {
-      description: "Add a filter parameter to a dashboard. Provide a unique parameter_id string; reuse the same parameter_id in dashboards_connect_filter to wire it to a card.",
+      description: "Add a filter parameter to a dashboard. Provide a unique parameter_id string; reuse the same parameter_id in dashboards_connect_filter to wire it to a card. Use values_source_type to control the dropdown source: 'static-list' for a fixed list, 'card' for values from a saved question, 'fields' for values from connected fields (requires a dimension tag_config on the card).",
       inputSchema: {
         dashboard_id: z.number().int().positive().describe("Dashboard ID"),
         parameter_id: z
@@ -1492,27 +1495,48 @@ export function createServer(): McpServer {
             "location/country",
           ])
           .describe("Filter type"),
+        values_source_type: z
+          .enum(["card", "static-list", "fields"])
+          .optional()
+          .describe(
+            "Where dropdown values come from. 'static-list': fixed list (provide values_source_config.values). 'card': from a saved question (provide values_source_config.card_id + value_field). 'fields': from connected dimension fields (use when connecting via tag_config with field_id). Omit to let Metabase derive values from the connected field.",
+          ),
+        values_source_config: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            "Config for the values source. For 'static-list': {\"values\": [[\"opt1\"], [\"opt2\"]]}. For 'card': {\"card_id\": 123, \"value_field\": [\"field\", <field_id>, null]}. For 'fields': {} or omit.",
+          ),
       },
     },
-    async ({ dashboard_id, parameter_id, name, type }) => {
+    async ({ dashboard_id, parameter_id, name, type, values_source_type, values_source_config }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         // Step 1: fetch current dashboard state (read-modify-write pattern)
         const dashboard = await client.getDashboard(dashboard_id);
         // Step 2: build the new parameter
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-        const newParam = { id: parameter_id, name, type, slug };
+        const newParam: Record<string, unknown> = { id: parameter_id, name, type, slug };
+        if (values_source_type !== undefined) {
+          newParam["values_source_type"] = values_source_type;
+        }
+        if (values_source_config !== undefined) {
+          newParam["values_source_config"] = values_source_config;
+        }
         // Step 3: PUT with existing parameters preserved + new parameter appended.
         // Send tabs too — Metabase v0.59 may wipe them if omitted from the PUT body.
         await client.updateDashboard(dashboard_id, {
-          parameters: [...dashboard.parameters, newParam],
+          parameters: [...dashboard.parameters, newParam as unknown as import("./types.js").MetabaseDashboardParameter],
           tabs: dashboard.tabs,
         });
+        const sourceNote = values_source_type
+          ? ` Values source: ${values_source_type}.`
+          : "";
         return {
           content: [
             {
               type: "text",
-              text: `Filter '${name}' added (parameter_id=${parameter_id}). Use dashboards_connect_filter with this parameter_id to wire it to a card.`,
+              text: `Filter '${name}' added (parameter_id=${parameter_id}).${sourceNote} Use dashboards_connect_filter with this parameter_id to wire it to a card.`,
             },
           ],
         };
@@ -1557,7 +1581,7 @@ export function createServer(): McpServer {
     },
     async ({ dashboard_id, dashcard_id, parameter_id, tag_name }) => {
       try {
-        const client = new MetabaseClient({});
+        const client = new MetabaseClient(credentials);
         // Step 1: fetch current dashboard state (read-modify-write pattern)
         const dashboard = await client.getDashboard(dashboard_id);
         // Step 2: verify the parameter_id exists (Pitfall 4 — fail loudly instead of silent no-op)
@@ -1643,20 +1667,286 @@ export function createServer(): McpServer {
 }
 
 // ---------------------------------------------------------------------------
-// Stdio bootstrap
+// HTTP transport helpers
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// OAuth Authorization Code store (in-memory, single-process)
+// ---------------------------------------------------------------------------
+
+interface AuthCode {
+  apiKey: string;
+  codeChallenge: string;
+  codeChallengeMethod: string;
+  redirectUri: string;
+  expiresAt: number;
+}
+
+const authCodes = new Map<string, AuthCode>();
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function readRawBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString();
+}
+
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  const raw = await readRawBody(req);
+  if (!raw) return undefined;
+  const ct = req.headers["content-type"] ?? "";
+  if (ct.includes("application/x-www-form-urlencoded")) return raw;
+  return JSON.parse(raw);
+}
+
+async function startHttpServer(port: number, host: string): Promise<void> {
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const origin = `${req.headers["x-forwarded-proto"] ?? "http"}://${req.headers["x-forwarded-host"] ?? req.headers.host ?? `${host}:${port}`}`;
+    const parsedUrl = new URL(req.url ?? "/", origin);
+    const { pathname } = parsedUrl;
+
+    // ------------------------------------------------------------------
+    // OAuth 2.0 Authorization Code + PKCE (required by Claude Desktop)
+    // Flow: GET /authorize → HTML form (user enters Metabase API key)
+    //       POST /authorize → store code, redirect to claude.ai callback
+    //       POST /oauth/token → validate PKCE, return access_token = API key
+    // ------------------------------------------------------------------
+
+    if (pathname === "/.well-known/oauth-protected-resource") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        resource: `${origin}/mcp`,
+        authorization_servers: [origin],
+      }));
+      return;
+    }
+
+    if (pathname === "/.well-known/oauth-authorization-server") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        issuer: origin,
+        authorization_endpoint: `${origin}/authorize`,
+        token_endpoint: `${origin}/oauth/token`,
+        grant_types_supported: ["authorization_code"],
+        code_challenge_methods_supported: ["S256"],
+        response_types_supported: ["code"],
+        token_endpoint_auth_methods_supported: ["none"],
+      }));
+      return;
+    }
+
+    // Authorization endpoint — GET: show API key form; POST: issue code
+    if (pathname === "/authorize") {
+      if (req.method === "GET") {
+        const q = parsedUrl.searchParams;
+        const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Metabase MCP — Authorize</title>
+<style>body{font-family:system-ui,sans-serif;max-width:420px;margin:80px auto;padding:0 20px}
+input{width:100%;padding:8px;margin:8px 0;box-sizing:border-box;font-size:14px}
+button{padding:10px 20px;background:#509ee3;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px}
+button:hover{background:#2d7fe3}.hint{color:#666;font-size:13px;margin-top:8px}</style>
+</head>
+<body>
+<h2>Metabase MCP</h2>
+<p>Enter your <strong>Metabase API key</strong> to authorize Claude.</p>
+<form method="POST" action="/authorize">
+  <input type="hidden" name="state" value="${escHtml(q.get("state") ?? "")}">
+  <input type="hidden" name="client_id" value="${escHtml(q.get("client_id") ?? "")}">
+  <input type="hidden" name="redirect_uri" value="${escHtml(q.get("redirect_uri") ?? "")}">
+  <input type="hidden" name="code_challenge" value="${escHtml(q.get("code_challenge") ?? "")}">
+  <input type="hidden" name="code_challenge_method" value="${escHtml(q.get("code_challenge_method") ?? "S256")}">
+  <label>Metabase API Key<br>
+    <input type="password" name="api_key" placeholder="mb_..." required autofocus>
+  </label>
+  <br><br>
+  <button type="submit">Authorize</button>
+</form>
+<p class="hint">Create one in Metabase: Admin → Settings → Authentication → API Keys</p>
+</body></html>`;
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html);
+        return;
+      }
+
+      if (req.method === "POST") {
+        const raw = await readBody(req) as string;
+        const params = new URLSearchParams(typeof raw === "string" ? raw : "");
+        const apiKey = params.get("api_key")?.trim();
+        const redirectUri = params.get("redirect_uri");
+        const state = params.get("state");
+        const codeChallenge = params.get("code_challenge");
+        const codeChallengeMethod = params.get("code_challenge_method") ?? "S256";
+
+        if (!apiKey || !redirectUri) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing api_key or redirect_uri");
+          return;
+        }
+
+        const code = randomUUID();
+        authCodes.set(code, {
+          apiKey,
+          codeChallenge: codeChallenge ?? "",
+          codeChallengeMethod,
+          redirectUri,
+          expiresAt: Date.now() + 10 * 60 * 1000,
+        });
+
+        const callbackUrl = new URL(redirectUri);
+        callbackUrl.searchParams.set("code", code);
+        if (state) callbackUrl.searchParams.set("state", state);
+
+        res.writeHead(302, { Location: callbackUrl.toString() });
+        res.end();
+        return;
+      }
+    }
+
+    if (pathname === "/oauth/token" && req.method === "POST") {
+      const raw = await readBody(req) as string | Record<string, string>;
+      const p = typeof raw === "string" ? new URLSearchParams(raw) : null;
+      const get = (k: string) => (p ? p.get(k) : (raw as Record<string, string>)[k]) ?? null;
+
+      const grantType = get("grant_type");
+      const code = get("code");
+      const codeVerifier = get("code_verifier");
+
+      if (grantType !== "authorization_code" || !code || !codeVerifier) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid_request" }));
+        return;
+      }
+
+      const stored = authCodes.get(code);
+      if (!stored || Date.now() > stored.expiresAt) {
+        authCodes.delete(code);
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid_grant", error_description: "Code expired or not found" }));
+        return;
+      }
+
+      // Validate PKCE S256: BASE64URL(SHA256(code_verifier)) === code_challenge
+      const digest = createHash("sha256").update(codeVerifier).digest("base64url");
+      if (stored.codeChallenge && digest !== stored.codeChallenge) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid_grant", error_description: "PKCE validation failed" }));
+        return;
+      }
+
+      authCodes.delete(code); // single-use
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ access_token: stored.apiKey, token_type: "Bearer", expires_in: 86400 }));
+      return;
+    }
+
+    // ------------------------------------------------------------------
+    // MCP Streamable HTTP endpoint
+    // ------------------------------------------------------------------
+
+    if (pathname !== "/mcp") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    if (req.method === "POST" && !sessionId) {
+      // Extract Metabase API key from Authorization: Bearer <token>.
+      // METABASE_API_KEY env var is not used in HTTP mode.
+      const authHeader = req.headers["authorization"];
+      const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+      if (!apiKey) {
+        res.writeHead(401, {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+        });
+        res.end(JSON.stringify({ error: "Unauthorized", error_description: "Bearer token required. Use OAuth Client Credentials to obtain one." }));
+        return;
+      }
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => { transports.set(id, transport); },
+        onsessionclosed: (id) => { transports.delete(id); },
+      });
+
+      const mcpServer = createServer({ apiKey });
+      await mcpServer.connect(transport);
+
+      const body = await readBody(req);
+      await transport.handleRequest(req, res, body);
+
+    } else if (sessionId) {
+      const transport = transports.get(sessionId);
+      if (!transport) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Session not found" }));
+        return;
+      }
+      const body = req.method === "POST" ? await readBody(req) : undefined;
+      await transport.handleRequest(req, res, body);
+
+    } else {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing mcp-session-id header" }));
+    }
+  }
+
+  const httpServer = createHttpServer((req, res) => {
+    handleRequest(req, res).catch((err) => {
+      console.error("[metabase-mcp] HTTP request error:", err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal server error" }));
+      }
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(port, host, () => {
+      console.error(`[metabase-mcp] Server running on HTTP transport at http://${host}:${port}/mcp`);
+      console.error(`[metabase-mcp] OAuth token endpoint: http://${host}:${port}/oauth/token`);
+      console.error(`[metabase-mcp] Use Metabase API key as OAuth Client Secret (client_credentials grant)`);
+      resolve();
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stdio/HTTP bootstrap
 // ---------------------------------------------------------------------------
 
 /**
- * main() starts the server on stdio transport.
+ * main() starts the server on stdio or HTTP transport based on TRANSPORT env var.
  * Guarded by the import.meta check so it does NOT run when imported by tests.
  *
  * On startup, attempts to validate the API key by calling GET /api/user/current.
  * Logs the authenticated user identity (or any auth failure) to stderr.
+ * Auth check is skipped for HTTP mode (credentials are per-session, not known at startup).
  */
 async function main(): Promise<void> {
-  const server = createServer();
+  const transportMode = process.env["TRANSPORT"] ?? "stdio";
 
-  // Validate API key on startup when env vars are present (T-01-05 mitigation).
+  if (transportMode === "http") {
+    // HTTP mode: credentials are per-session (apiKey from URL param).
+    // No shared API key at startup — skip auth check.
+    const port = parseInt(process.env["PORT"] ?? "3000", 10);
+    const httpHost = process.env["HOST"] ?? "0.0.0.0";
+    await startHttpServer(port, httpHost);
+    return;
+  }
+
+  // Stdio mode: validate API key on startup when env vars are present (T-01-05 mitigation).
   // Auth failure is logged but does NOT prevent the server from starting —
   // the LLM will receive a MetabaseApiError when it attempts a real tool call.
   if (process.env["METABASE_URL"] && process.env["METABASE_API_KEY"]) {
@@ -1683,6 +1973,7 @@ async function main(): Promise<void> {
     );
   }
 
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`[metabase-mcp] Server running on stdio transport.`);

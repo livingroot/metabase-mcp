@@ -1,4 +1,19 @@
 services:
+  metabase-mcp:
+    build: .
+    container_name: metabase-mcp
+    ports:
+      - "4000:4000"
+    environment:
+      TRANSPORT: http
+      PORT: 4000
+      HOST: "0.0.0.0"
+      METABASE_URL: http://metabase:3000
+    depends_on:
+      metabase:
+        condition: service_healthy
+    restart: unless-stopped
+
   metabase:
     image: metabase/metabase:v0.59.14
     container_name: metabase-mcp-dev

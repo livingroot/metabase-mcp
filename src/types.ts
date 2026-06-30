@@ -136,6 +136,12 @@ export interface MetabaseDashboard {
 
 /**
  * A filter parameter attached to a dashboard.
+ *
+ * values_source_type controls where dropdown values come from:
+ *   "card"        — values from a saved question (needs values_source_config.card_id + value_field)
+ *   "static-list" — hardcoded list (needs values_source_config.values: string[][])
+ *   "fields"      — values from connected fields (default when type=dimension filter)
+ *   absent/null   — Metabase default: derives values from connected field
  */
 export interface MetabaseDashboardParameter {
   id: string;
@@ -143,6 +149,8 @@ export interface MetabaseDashboardParameter {
   type: string;
   slug: string;
   default?: unknown;
+  values_source_type?: "card" | "static-list" | "fields" | null;
+  values_source_config?: Record<string, unknown>;
 }
 
 /**
