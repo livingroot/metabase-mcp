@@ -31,6 +31,38 @@ function escapeMd(value: string): string {
 }
 
 /**
+ * Extracts a card's template-tags in structured form (FIX-04).
+ * Reads both the legacy (dataset_query.native["template-tags"]) and v0.59+
+ * pMBQL (stages[i]["template-tags"]) locations. Metabase's hyphenated keys
+ * are normalized to snake_case, and dimension ["field", <id>, <options>] is
+ * unpacked to a plain field_id. Undefined fields are omitted.
+ */
+function extractTemplateTags(card: MetabaseCard): Record<string, Record<string, unknown>> {
+  const nativeStage = card.dataset_query.stages?.find(
+    (s) => s["lib/type"] === "mbql.stage/native",
+  );
+  const rawTags =
+    nativeStage?.["template-tags"] ??
+    card.dataset_query.native?.["template-tags"] ??
+    {};
+  const result: Record<string, Record<string, unknown>> = {};
+  for (const [name, tag] of Object.entries(rawTags)) {
+    const entry: Record<string, unknown> = { name: tag.name ?? name, type: tag.type };
+    if (tag["display-name"] !== undefined) entry.display_name = tag["display-name"];
+    if (Array.isArray(tag.dimension) && typeof tag.dimension[1] === "number") {
+      entry.field_id = tag.dimension[1];
+    }
+    if (tag["widget-type"] !== undefined) entry.widget_type = tag["widget-type"];
+    if (tag.default !== undefined) entry.default = tag.default;
+    if (tag.required !== undefined) entry.required = tag.required;
+    if (tag["card-id"] !== undefined) entry.card_id = tag["card-id"];
+    if (tag["snippet-name"] !== undefined) entry.snippet_name = tag["snippet-name"];
+    result[name] = entry;
+  }
+  return result;
+}
+
+/**
  * Formats a MetabaseDatabaseMetadata object as a hierarchical Markdown string.
  *
  * Output structure:
@@ -787,7 +819,7 @@ You are working with a Metabase instance via its REST API.
   server.registerTool(
     "cards_get",
     {
-      description: "Retrieve the full saved question including its SQL query definition, visualization settings, and result metadata. Returns SQL in a fenced code block for native SQL cards.",
+      description: "Retrieve the full saved question including its SQL query definition and template-tags configuration (name, type, field_id, widget_type, default, required) as structured JSON. Returns SQL in a fenced code block for native SQL cards.",
       inputSchema: {
         card_id: z
           .number()
@@ -828,6 +860,18 @@ You are working with a Metabase instance via its REST API.
           lines.push("```sql");
           lines.push(safeSql);
           lines.push("```");
+          // FIX-04: surface the full template-tags configuration so agents can
+          // see filter bindings (field_id, widget_type, defaults) without
+          // reverse-engineering them from the SQL placeholders.
+          const tags = extractTemplateTags(card);
+          if (Object.keys(tags).length > 0) {
+            const safeTags = JSON.stringify(tags, null, 2).replace(/```/g, "\\`\\`\\`");
+            lines.push("");
+            lines.push("**Template tags:**");
+            lines.push("```json");
+            lines.push(safeTags);
+            lines.push("```");
+          }
         } else {
           const queryType = card.dataset_query.type ?? card.dataset_query["lib/type"] ?? "unknown";
           lines.push(
@@ -1791,8 +1835,9 @@ You are working with a Metabase instance via its REST API.
         if (target_type === undefined) {
           try {
             const card = await client.getCard(target.card_id!);
-            const nativeTags =
-              (card.dataset_query?.native?.["template-tags"] as Record<string, Record<string, unknown>> | undefined) ?? {};
+            // FIX-04 drive-by: extractTemplateTags also reads the v0.59+ pMBQL
+            // location — the old legacy-only lookup missed dimension tags there.
+            const nativeTags = extractTemplateTags(card);
             if (nativeTags[tag_name]?.["type"] === "dimension") {
               resolvedTargetType = "dimension";
             }

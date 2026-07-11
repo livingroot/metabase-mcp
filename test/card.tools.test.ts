@@ -74,8 +74,26 @@ const SEED_CARD_DETAIL_NATIVE = {
     type: "native",
     database: 1,
     native: {
-      query: "SELECT * FROM orders",
-      "template-tags": {},
+      query: "SELECT * FROM orders WHERE status = {{status}} AND [[{{sprint_name}}]]",
+      "template-tags": {
+        status: {
+          id: "status",
+          name: "status",
+          "display-name": "Status",
+          type: "text",
+          default: "paid",
+          required: false,
+        },
+        sprint_name: {
+          id: "sprint_name",
+          name: "sprint_name",
+          "display-name": "Sprint Name",
+          type: "dimension",
+          dimension: ["field", 12694, null],
+          "widget-type": "string/=",
+          required: true,
+        },
+      },
     },
   },
   visualization_settings: {},
@@ -315,6 +333,96 @@ describe("MCP card tools", () => {
       expect(res.isError).toBeFalsy();
       const text = (res.content[0] as { type: string; text: string }).text;
       expect(text).toContain("SELECT * FROM orders");
+    });
+
+    it("native card: returns the full template-tags configuration in structured form (FIX-04)", async () => {
+      vi.stubGlobal("fetch", makeFetchMock(200, SEED_CARD_DETAIL_NATIVE));
+
+      const res = await client.callTool({
+        name: "cards_get",
+        arguments: { card_id: 1 },
+      });
+
+      expect(res.isError).toBeFalsy();
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("**Template tags:**");
+      // Structured JSON block is parseable and carries the full tag config
+      const jsonBlock = /```json\n([\s\S]*?)\n```/.exec(text);
+      expect(jsonBlock).not.toBeNull();
+      const tags = JSON.parse(jsonBlock![1]) as Record<string, Record<string, unknown>>;
+      expect(tags.status).toEqual({
+        name: "status",
+        display_name: "Status",
+        type: "text",
+        default: "paid",
+        required: false,
+      });
+      expect(tags.sprint_name).toEqual({
+        name: "sprint_name",
+        display_name: "Sprint Name",
+        type: "dimension",
+        field_id: 12694,
+        widget_type: "string/=",
+        required: true,
+      });
+    });
+
+    it("native card without tags: omits the Template tags section", async () => {
+      const noTags = {
+        ...SEED_CARD_DETAIL_NATIVE,
+        dataset_query: {
+          type: "native",
+          database: 1,
+          native: { query: "SELECT 1", "template-tags": {} },
+        },
+      };
+      vi.stubGlobal("fetch", makeFetchMock(200, noTags));
+
+      const res = await client.callTool({
+        name: "cards_get",
+        arguments: { card_id: 1 },
+      });
+
+      expect(res.isError).toBeFalsy();
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).not.toContain("Template tags");
+    });
+
+    it("pMBQL native card (v0.59+): reads template-tags from the native stage (FIX-04)", async () => {
+      const pmbqlCard = {
+        ...SEED_CARD_DETAIL_NATIVE,
+        dataset_query: {
+          "lib/type": "mbql/query",
+          database: 1,
+          stages: [
+            {
+              "lib/type": "mbql.stage/native",
+              native: "SELECT * FROM orders WHERE id = {{order_id}}",
+              "template-tags": {
+                order_id: {
+                  id: "order_id",
+                  name: "order_id",
+                  "display-name": "Order ID",
+                  type: "number",
+                  required: false,
+                },
+              },
+            },
+          ],
+        },
+      };
+      vi.stubGlobal("fetch", makeFetchMock(200, pmbqlCard));
+
+      const res = await client.callTool({
+        name: "cards_get",
+        arguments: { card_id: 1 },
+      });
+
+      expect(res.isError).toBeFalsy();
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("**Template tags:**");
+      expect(text).toContain('"type": "number"');
+      expect(text).toContain('"display_name": "Order ID"');
     });
 
     it("MBQL card: response is NOT isError and the tool does not throw (surfaces non-native notice)", async () => {

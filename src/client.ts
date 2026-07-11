@@ -10,7 +10,7 @@
  * MetabaseClient:   HTTP client scoped to a single Metabase instance.
  */
 
-import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard, MetabaseDashboardParameter, MetabaseDashboardTab, MetabaseDashcard, MetabaseParameterMapping } from "./types.js";
+import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard, MetabaseDashboardParameter, MetabaseDashboardTab, MetabaseDashcard, MetabaseParameterMapping, MetabaseTemplateTag } from "./types.js";
 import { allowedWidgetTypes, defaultWidgetType } from "./widget-types.js";
 
 // ---------------------------------------------------------------------------
@@ -594,7 +594,9 @@ export class MetabaseClient {
         stages[nativeStageIdx] = {
           ...nativeStage,
           native: updates.sql,
-          "template-tags": mergedTags,
+          // Values originate from the source card's stored tags or
+          // buildTemplateTags — both conform to MetabaseTemplateTag at runtime.
+          "template-tags": mergedTags as Record<string, MetabaseTemplateTag>,
         };
         body["dataset_query"] = {
           ...sourceCard.dataset_query,
