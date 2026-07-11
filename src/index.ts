@@ -18,6 +18,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import { MetabaseClient, MetabaseApiError, type MetabaseClientOptions } from "./client.js";
+import { WIDGET_TYPE_MATRIX_DOC } from "./widget-types.js";
 import type { MetabaseDatabase, MetabaseDatabaseMetadata, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseCard } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -861,7 +862,7 @@ You are working with a Metabase instance via its REST API.
   server.registerTool(
     "cards_create",
     {
-      description: "Create a native SQL saved question in Metabase from a database ID, SQL query, and display name. Returns the new card ID.",
+      description: "Create a native SQL saved question in Metabase from a database ID, SQL query, and display name. Returns the new card ID. Field Filter widget_type is auto-detected from the target field's type when omitted and validated against it before saving.",
       inputSchema: {
         database_id: z
           .number()
@@ -889,13 +890,13 @@ You are working with a Metabase instance via its REST API.
             z.object({
               type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension'"),
               field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
-              widget_type: z.string().optional().describe("Widget type for dimension filter, e.g. 'string/=' (default when field_id is set)"),
+              widget_type: z.string().optional().describe(`Widget type for the dimension filter. Optional — when omitted it is auto-detected from the target field's type; when provided it is validated against the field before saving. Supported per field type: ${WIDGET_TYPE_MATRIX_DOC}. Requires field_id.`),
               display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
             }),
           )
           .optional()
           .describe(
-            "Full tag configuration for {{template_tag}} variables. Supersedes tag_types. Use for dimension tags: set type='dimension', field_id=<id> to create a working dashboard filter. Example: {\"sprint_name\": {\"type\": \"dimension\", \"field_id\": 12694}}",
+            "Full tag configuration for {{template_tag}} variables. Supersedes tag_types. Use for dimension tags: set type='dimension', field_id=<id> to create a working dashboard filter; widget_type is auto-detected from the field's type when omitted and validated against it before saving. Example: {\"sprint_name\": {\"type\": \"dimension\", \"field_id\": 12694}}",
           ),
       },
     },
@@ -934,7 +935,7 @@ You are working with a Metabase instance via its REST API.
   server.registerTool(
     "cards_update",
     {
-      description: "Update a saved question's name, description, or SQL. Only the provided fields are changed. Requires database_id when updating sql. Pass ref_card_id to copy template-tag types from another card (fixes broken filter types).",
+      description: "Update a saved question's name, description, or SQL. Only the provided fields are changed. Requires database_id when updating sql. Pass ref_card_id to copy template-tag types from another card (fixes broken filter types). Field Filter widget_type is auto-detected from the target field's type when omitted and validated against it before saving.",
       inputSchema: {
         card_id: z
           .number()
@@ -968,13 +969,13 @@ You are working with a Metabase instance via its REST API.
             z.object({
               type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension'"),
               field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
-              widget_type: z.string().optional().describe("Widget type for dimension filter, e.g. 'string/=' (default when field_id is set)"),
+              widget_type: z.string().optional().describe(`Widget type for the dimension filter. Optional — when omitted it is auto-detected from the target field's type; when provided it is validated against the field before saving. Supported per field type: ${WIDGET_TYPE_MATRIX_DOC}. Requires field_id.`),
               display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
             }),
           )
           .optional()
           .describe(
-            "Full tag configuration for {{template_tag}} variables. Supersedes tag_types. Use for dimension tags: set type='dimension', field_id=<id> to create a working dashboard filter. Example: {\"sprint_name\": {\"type\": \"dimension\", \"field_id\": 12694}}",
+            "Full tag configuration for {{template_tag}} variables. Supersedes tag_types. Use for dimension tags: set type='dimension', field_id=<id> to create a working dashboard filter; widget_type is auto-detected from the field's type when omitted and validated against it before saving. Example: {\"sprint_name\": {\"type\": \"dimension\", \"field_id\": 12694}}",
           ),
         display: z
           .string()

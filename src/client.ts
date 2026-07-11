@@ -11,6 +11,7 @@
  */
 
 import type { MetabaseUser, MetabaseDatabaseMetadata, MetabaseDatabaseListResponse, MetabaseTableQueryMetadata, MetabaseField, MetabaseFieldValues, MetabaseDatasetResponse, MetabaseQueryParameter, MetabaseCardListItem, MetabaseCard, MetabaseDashboardListItem, MetabaseDashboard, MetabaseDashboardParameter, MetabaseDashboardTab, MetabaseDashcard, MetabaseParameterMapping } from "./types.js";
+import { allowedWidgetTypes, defaultWidgetType } from "./widget-types.js";
 
 // ---------------------------------------------------------------------------
 // MetabaseApiError
@@ -58,7 +59,10 @@ function applyTagConfigs(tags: Record<string, unknown>, tagConfigs: Record<strin
     tag["type"] = config.type;
     if (config.field_id !== undefined) {
       tag["dimension"] = ["field", config.field_id, null];
-      tag["widget-type"] = config.widget_type ?? "string/=";
+      // widget_type is guaranteed by resolveWidgetTypes() before this runs
+      if (config.widget_type !== undefined) {
+        tag["widget-type"] = config.widget_type;
+      }
     }
     if (config.display_name !== undefined) {
       tag["display-name"] = config.display_name;
@@ -388,6 +392,57 @@ export class MetabaseClient {
   }
 
   /**
+   * Resolves and validates widget_type for every tag config (FIX-02).
+   *
+   * For each config with a field_id, fetches the field's metadata (one GET per
+   * distinct field_id) and either fills in the field-type-appropriate default
+   * widget_type or rejects a provided widget_type that Metabase would not
+   * accept for that field — before anything is saved. A widget_type without a
+   * field_id is also rejected (previously it was silently ignored).
+   *
+   * Returns a new tagConfigs object; the caller's input is never mutated.
+   */
+  private async resolveWidgetTypes(tagConfigs: Record<string, TagConfig>): Promise<Record<string, TagConfig>> {
+    const fieldCache = new Map<number, Promise<MetabaseField>>();
+    const getFieldCached = (fieldId: number): Promise<MetabaseField> => {
+      let cached = fieldCache.get(fieldId);
+      if (cached === undefined) {
+        cached = this.getField(fieldId);
+        fieldCache.set(fieldId, cached);
+      }
+      return cached;
+    };
+
+    const resolved: Record<string, TagConfig> = {};
+    for (const [tagName, config] of Object.entries(tagConfigs)) {
+      if (config.field_id === undefined) {
+        if (config.widget_type !== undefined) {
+          throw new Error(
+            `tag_configs.${tagName}: widget_type requires field_id — a Field Filter widget is bound to a physical column`,
+          );
+        }
+        resolved[tagName] = config;
+        continue;
+      }
+      const field = await getFieldCached(config.field_id);
+      if (config.widget_type === undefined) {
+        resolved[tagName] = { ...config, widget_type: defaultWidgetType(field) };
+      } else {
+        const allowed = allowedWidgetTypes(field);
+        if (!allowed.includes(config.widget_type)) {
+          throw new Error(
+            `tag_configs.${tagName}: widget_type "${config.widget_type}" is not valid for field ${field.id} ` +
+              `("${field.name}", base_type ${field.base_type}, semantic_type ${field.semantic_type}) — ` +
+              `supported for this field: ${allowed.join(", ")}`,
+          );
+        }
+        resolved[tagName] = config;
+      }
+    }
+    return resolved;
+  }
+
+  /**
    * Creates a native SQL saved question (card) in Metabase.
    * Calls POST /api/card with Content-Type: application/json.
    *
@@ -411,7 +466,7 @@ export class MetabaseClient {
   ): Promise<MetabaseCard> {
     const templateTags = buildTemplateTags(sql, tagTypes);
     if (tagConfigs) {
-      applyTagConfigs(templateTags, tagConfigs);
+      applyTagConfigs(templateTags, await this.resolveWidgetTypes(tagConfigs));
     }
     const body: Record<string, unknown> = {
       name,
@@ -462,6 +517,11 @@ export class MetabaseClient {
       visualizationSettings?: Record<string, unknown>;
     },
   ): Promise<MetabaseCard> {
+    // FIX-02: validate widget_type/field-type combinations up front so invalid
+    // input fails fast with zero reads or writes against Metabase.
+    const resolvedTagConfigs = updates.tagConfigs
+      ? await this.resolveWidgetTypes(updates.tagConfigs)
+      : undefined;
     const body: Record<string, unknown> = {};
     if (updates.name !== undefined) {
       body["name"] = updates.name;
@@ -521,8 +581,8 @@ export class MetabaseClient {
       }
       // tagConfigs takes highest priority and also writes dimension/widget-type
       // fields required for dimension filter tags to work on dashboards.
-      if (updates.tagConfigs) {
-        applyTagConfigs(mergedTags, updates.tagConfigs);
+      if (resolvedTagConfigs) {
+        applyTagConfigs(mergedTags, resolvedTagConfigs);
       }
 
       // Build dataset_query in the SAME FORMAT as the source card so Metabase

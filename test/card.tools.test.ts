@@ -475,6 +475,229 @@ describe("MCP card tools", () => {
   });
 
   // -------------------------------------------------------------------------
+  // FIX-02: widget_type auto-detection & validation for Field Filter tags
+  // -------------------------------------------------------------------------
+
+  describe("FIX-02: widget_type auto-detection & validation", () => {
+    const SEED_FIELD_DATE = {
+      id: 205,
+      name: "created_at",
+      display_name: "Created At",
+      base_type: "type/DateTimeWithLocalTZ",
+      semantic_type: null,
+      visibility_type: "normal",
+      database_required: false,
+      fk_target_field_id: null,
+    };
+
+    const SEED_FIELD_FK = {
+      id: 301,
+      name: "org_id",
+      display_name: "Org ID",
+      base_type: "type/Integer",
+      semantic_type: "type/FK",
+      visibility_type: "normal",
+      database_required: false,
+      fk_target_field_id: 42,
+    };
+
+    const SEED_FIELD_TEXT = {
+      id: 410,
+      name: "status",
+      display_name: "Status",
+      base_type: "type/Text",
+      semantic_type: null,
+      visibility_type: "normal",
+      database_required: false,
+      fk_target_field_id: null,
+    };
+
+    function tagBody(mockFetch: typeof fetch, callIdx: number): Record<string, Record<string, unknown>> {
+      const init = (mockFetch as ReturnType<typeof vi.fn>).mock.calls[callIdx][1] as RequestInit;
+      const body = JSON.parse(init.body as string) as {
+        dataset_query: { native: { "template-tags": Record<string, Record<string, unknown>> } };
+      };
+      return body.dataset_query.native["template-tags"];
+    }
+
+    it("cards_create auto-detects date/all-options for a date field when widget_type is omitted", async () => {
+      const mockFetch = makeSequentialFetchMock([[200, SEED_FIELD_DATE], [200, SEED_CARD_CREATED]]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_create",
+        arguments: {
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{start_date}}",
+          name: "Date Filtered",
+          tag_configs: { start_date: { type: "dimension", field_id: 205 } },
+        },
+      });
+
+      expect(res.isError).toBeFalsy();
+      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls[0][0] as string).toMatch(/\/api\/field\/205$/);
+      expect(calls[1][0] as string).toMatch(/\/api\/card$/);
+      const tags = tagBody(mockFetch, 1);
+      expect(tags["start_date"]["widget-type"]).toBe("date/all-options");
+      expect(tags["start_date"]["dimension"]).toEqual(["field", 205, null]);
+    });
+
+    it("cards_create auto-detects the id widget for an FK field", async () => {
+      const mockFetch = makeSequentialFetchMock([[200, SEED_FIELD_FK], [200, SEED_CARD_CREATED]]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_create",
+        arguments: {
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{org}}",
+          name: "Org Filtered",
+          tag_configs: { org: { type: "dimension", field_id: 301 } },
+        },
+      });
+
+      expect(res.isError).toBeFalsy();
+      expect(tagBody(mockFetch, 1)["org"]["widget-type"]).toBe("id");
+    });
+
+    it("cards_create passes through an explicit valid widget_type unchanged", async () => {
+      const mockFetch = makeSequentialFetchMock([[200, SEED_FIELD_TEXT], [200, SEED_CARD_CREATED]]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_create",
+        arguments: {
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{status}}",
+          name: "Status Filtered",
+          tag_configs: { status: { type: "dimension", field_id: 410, widget_type: "string/contains" } },
+        },
+      });
+
+      expect(res.isError).toBeFalsy();
+      // Field metadata is still fetched to validate the explicit widget_type
+      expect((mockFetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string).toMatch(/\/api\/field\/410$/);
+      expect(tagBody(mockFetch, 1)["status"]["widget-type"]).toBe("string/contains");
+    });
+
+    it("cards_create rejects an invalid widget_type/field-type combination before saving", async () => {
+      const mockFetch = makeSequentialFetchMock([[200, SEED_FIELD_TEXT]]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_create",
+        arguments: {
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{status}}",
+          name: "Broken Filter",
+          tag_configs: { status: { type: "dimension", field_id: 410, widget_type: "date/all-options" } },
+        },
+      });
+
+      expect(res.isError).toBe(true);
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("tag_configs.status");
+      expect(text).toContain('"date/all-options" is not valid for field 410');
+      expect(text).toContain("string/=");
+      // Only the field GET happened — the card was never POSTed
+      expect((mockFetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    });
+
+    it("cards_create rejects widget_type without field_id, with no API call at all", async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_create",
+        arguments: {
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{status}}",
+          name: "Orphan Widget",
+          tag_configs: { status: { type: "dimension", widget_type: "string/=" } },
+        },
+      });
+
+      expect(res.isError).toBe(true);
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain("widget_type requires field_id");
+      expect(mockFetch.mock.calls.length).toBe(0);
+    });
+
+    it("fetches field metadata once when two tags share the same field_id", async () => {
+      const mockFetch = makeSequentialFetchMock([[200, SEED_FIELD_DATE], [200, SEED_CARD_CREATED]]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_create",
+        arguments: {
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{from_date}} AND {{to_date}}",
+          name: "Double Date",
+          tag_configs: {
+            from_date: { type: "dimension", field_id: 205 },
+            to_date: { type: "dimension", field_id: 205 },
+          },
+        },
+      });
+
+      expect(res.isError).toBeFalsy();
+      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.length).toBe(2); // one field GET + one card POST
+      const tags = tagBody(mockFetch, 1);
+      expect(tags["from_date"]["widget-type"]).toBe("date/all-options");
+      expect(tags["to_date"]["widget-type"]).toBe("date/all-options");
+    });
+
+    it("cards_update auto-detects the widget_type when updating sql with tag_configs", async () => {
+      // Sequence: field GET (resolve) → source card GET (merge) → PUT
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_FIELD_DATE],
+        [200, SEED_CARD_DETAIL_NATIVE],
+        [200, SEED_CARD_DETAIL_NATIVE],
+      ]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_update",
+        arguments: {
+          card_id: 1,
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{start_date}}",
+          tag_configs: { start_date: { type: "dimension", field_id: 205 } },
+        },
+      });
+
+      expect(res.isError).toBeFalsy();
+      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls[0][0] as string).toMatch(/\/api\/field\/205$/);
+      expect((calls[2][1] as RequestInit).method).toBe("PUT");
+      expect(tagBody(mockFetch, 2)["start_date"]["widget-type"]).toBe("date/all-options");
+    });
+
+    it("cards_update rejects an invalid combination before reading or writing the card", async () => {
+      const mockFetch = makeSequentialFetchMock([[200, SEED_FIELD_TEXT]]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "cards_update",
+        arguments: {
+          card_id: 1,
+          database_id: 1,
+          sql: "SELECT * FROM orders WHERE {{status}}",
+          tag_configs: { status: { type: "dimension", field_id: 410, widget_type: "number/=" } },
+        },
+      });
+
+      expect(res.isError).toBe(true);
+      const text = (res.content[0] as { type: string; text: string }).text;
+      expect(text).toContain('"number/=" is not valid for field 410');
+      // Only the field GET happened — no card GET, no PUT
+      expect((mockFetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // cards_delete (CARDS-06, RED until Plan 02)
   // -------------------------------------------------------------------------
 
