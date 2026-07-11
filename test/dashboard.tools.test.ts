@@ -794,10 +794,36 @@ describe("MCP dashboard tools", () => {
   // -------------------------------------------------------------------------
 
   describe("dashboards_connect_filter", () => {
+    // Card returned by the GET /api/card/:id that target_type auto-detection
+    // performs when target_type is omitted (added in FIX-02).
+    const SEED_CONNECT_FILTER_CARD = {
+      id: 101,
+      dataset_query: {
+        type: "native",
+        database: 1,
+        native: {
+          query: "SELECT * FROM orders WHERE status = {{status}}",
+          "template-tags": {
+            status: { id: "status", name: "status", "display-name": "Status", type: "text" },
+          },
+        },
+      },
+    };
+
+    /** Returns the first PUT call's [url, init] — index-independent. */
+    function findPutCall(mockFetch: typeof fetch): [string, RequestInit] {
+      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
+      const put = calls.find((c) => (c[1] as RequestInit | undefined)?.method === "PUT");
+      expect(put).toBeDefined();
+      return put as [string, RequestInit];
+    }
+
     it("the PUT body targets /api/dashboard/1/cards and the target dashcard has correct parameter_mappings", async () => {
-      // Two sequential calls: GET (fetch current state) then PUT (update dashcards)
+      // Three sequential calls: GET dashboard, GET card (target_type
+      // auto-detection), then PUT (update dashcards)
       const mockFetch = makeSequentialFetchMock([
         [200, SEED_DASHBOARD_DETAIL],
+        [200, SEED_CONNECT_FILTER_CARD],
         [200, {}],
       ]);
       vi.stubGlobal("fetch", mockFetch);
@@ -812,11 +838,8 @@ describe("MCP dashboard tools", () => {
         },
       });
 
-      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
-      expect(calls.length).toBeGreaterThanOrEqual(2);
-      const putUrl = calls[1][0] as string;
+      const [putUrl, putInit] = findPutCall(mockFetch);
       expect(putUrl).toMatch(/\/api\/dashboard\/1\/cards$/);
-      const putInit = calls[1][1] as RequestInit;
       expect(putInit.method).toBe("PUT");
       const putBody = JSON.parse(putInit.body as string) as {
         cards: Array<{
@@ -843,6 +866,7 @@ describe("MCP dashboard tools", () => {
     it("the OTHER dashcard's parameter_mappings is preserved (still an array, not dropped)", async () => {
       const mockFetch = makeSequentialFetchMock([
         [200, SEED_DASHBOARD_DETAIL],
+        [200, SEED_CONNECT_FILTER_CARD],
         [200, {}],
       ]);
       vi.stubGlobal("fetch", mockFetch);
@@ -857,8 +881,7 @@ describe("MCP dashboard tools", () => {
         },
       });
 
-      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
-      const putInit = calls[1][1] as RequestInit;
+      const [, putInit] = findPutCall(mockFetch);
       const putBody = JSON.parse(putInit.body as string) as {
         cards: Array<{ id: number; parameter_mappings: unknown[] }>;
       };
@@ -906,6 +929,7 @@ describe("MCP dashboard tools", () => {
     it("[BUG-2] default target_type (variable) still generates ['variable', ['template-tag', tag_name]] target", async () => {
       const mockFetch = makeSequentialFetchMock([
         [200, SEED_DASHBOARD_DETAIL],
+        [200, SEED_CONNECT_FILTER_CARD],
         [200, {}],
       ]);
       vi.stubGlobal("fetch", mockFetch);
@@ -921,8 +945,7 @@ describe("MCP dashboard tools", () => {
         },
       });
 
-      const calls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls;
-      const putInit = calls[1][1] as RequestInit;
+      const [, putInit] = findPutCall(mockFetch);
       const putBody = JSON.parse(putInit.body as string) as {
         cards: Array<{
           id: number;

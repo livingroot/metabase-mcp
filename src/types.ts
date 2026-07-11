@@ -71,6 +71,24 @@ export interface MetabaseCardListItem {
 }
 
 /**
+ * A single template-tag configuration as returned by GET /api/card/:id inside
+ * dataset_query.native["template-tags"] (legacy) or stages[i]["template-tags"]
+ * (v0.59+ pMBQL). Keys use Metabase's hyphenated names verbatim.
+ */
+export interface MetabaseTemplateTag {
+  id: string;
+  name: string;
+  "display-name"?: string;
+  type: string;                          // "text" | "number" | "date" | "dimension" | "card" | "snippet"
+  dimension?: [string, number, unknown]; // ["field", <field_id>, <options>] — dimension tags only
+  "widget-type"?: string;                // e.g. "string/=" — dimension tags only
+  default?: unknown;
+  required?: boolean;
+  "card-id"?: number;                    // card-reference tags ({{#87-slug}}) only
+  "snippet-name"?: string;               // snippet tags only
+}
+
+/**
  * Represents a saved question (card) returned by GET /api/card/:id.
  * Extends MetabaseCardListItem with the full query definition, visualization
  * settings, and result metadata. Used by card CRUD tools in Phase 4.
@@ -92,14 +110,14 @@ export interface MetabaseCard extends MetabaseCardListItem {
     // Legacy native sub-object
     native?: {
       query: string;
-      "template-tags": Record<string, unknown>;
+      "template-tags": Record<string, MetabaseTemplateTag>;
     };
     query?: Record<string, unknown>;
     // v0.59+ stages array — each stage has lib/type and (for native) a string native field
     stages?: Array<{
       "lib/type": string;              // "mbql.stage/native" | "mbql.stage/mbql"
       native?: string;                 // SQL string (v0.59+ native stage only)
-      "template-tags"?: Record<string, unknown>; // Template tag configs (v0.59+ pMBQL native stage)
+      "template-tags"?: Record<string, MetabaseTemplateTag>; // Template tag configs (v0.59+ pMBQL native stage)
     }>;
   };
   visualization_settings: Record<string, unknown>;
