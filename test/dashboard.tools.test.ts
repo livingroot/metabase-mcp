@@ -756,6 +756,36 @@ describe("MCP dashboard tools", () => {
       expect(text).toContain("p_region");
     });
 
+    it("creates a temporal-unit (time grouping) filter with default and a non-empty slug for Cyrillic names", async () => {
+      const mockFetch = makeSequentialFetchMock([
+        [200, SEED_DASHBOARD_DETAIL],
+        [200, {}],
+      ]);
+      vi.stubGlobal("fetch", mockFetch);
+
+      const res = await client.callTool({
+        name: "dashboards_add_filter",
+        arguments: {
+          dashboard_id: 1,
+          parameter_id: "commits_grouping",
+          name: "Группировка",
+          type: "temporal-unit",
+          default: "week",
+        },
+      });
+
+      expect(res.isError).toBeFalsy();
+      const putInit = (mockFetch as ReturnType<typeof vi.fn>).mock.calls[1][1] as RequestInit;
+      const putBody = JSON.parse(putInit.body as string) as {
+        parameters: Array<Record<string, unknown>>;
+      };
+      const param = putBody.parameters.find((p) => p.id === "commits_grouping")!;
+      expect(param.type).toBe("temporal-unit");
+      expect(param.sectionId).toBe("temporal-unit");
+      expect(param.default).toBe("week");
+      expect(param.slug).toBe("commits_grouping");
+    });
+
     it("[BUG-4] calling with same parameter_id replaces existing parameter (upsert, not duplicate)", async () => {
       // Regression test for BUG-4: dashboards_add_filter must replace an existing
       // parameter with the same id rather than appending a duplicate.
@@ -957,5 +987,14 @@ describe("MCP dashboard tools", () => {
       const mapping = targetCard!.parameter_mappings[0];
       expect(mapping.target).toEqual(["variable", ["template-tag", "status"]]);
     });
+  });
+});
+
+describe("resolveParameterSlug", () => {
+  it("falls back to parameter_id for Cyrillic names and de-duplicates", async () => {
+    const { resolveParameterSlug } = await import("../src/index.js");
+    expect(resolveParameterSlug(undefined, "Дата от", "date_from", ["_"])).toBe("date_from");
+    expect(resolveParameterSlug(undefined, "Status", "p1", ["status"])).toBe("status_2");
+    expect(resolveParameterSlug("custom", "X", "p", [])).toBe("custom");
   });
 });

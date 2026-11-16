@@ -415,6 +415,20 @@ export class MetabaseClient {
 
     const resolved: Record<string, TagConfig> = {};
     for (const [tagName, config] of Object.entries(tagConfigs)) {
+      // Time grouping tags ("temporal-unit") bind to a date/time column but have
+      // no widget-type: the dashboard "Time grouping" widget picks the unit.
+      if (config.type === "temporal-unit") {
+        if (config.field_id === undefined) {
+          throw new Error(
+            `tag_configs.${tagName}: type "temporal-unit" requires field_id — time grouping is bound to a date/time column`,
+          );
+        }
+        if (config.widget_type !== undefined) {
+          throw new Error(`tag_configs.${tagName}: widget_type is not supported for type "temporal-unit"`);
+        }
+        resolved[tagName] = config;
+        continue;
+      }
       if (config.field_id === undefined) {
         if (config.widget_type !== undefined) {
           throw new Error(

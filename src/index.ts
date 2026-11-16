@@ -37,6 +37,27 @@ function escapeMd(value: string): string {
  * are normalized to snake_case, and dimension ["field", <id>, <options>] is
  * unpacked to a plain field_id. Undefined fields are omitted.
  */
+/**
+ * Builds a dashboard parameter slug. Metabase uses slugs as URL query keys, so
+ * they must be non-empty and unique per dashboard. Names without Latin letters
+ * or digits (e.g. Cyrillic) used to collapse to "_" and collide with each other.
+ */
+export function resolveParameterSlug(
+  explicit: string | undefined,
+  name: string,
+  parameterId: string,
+  existingSlugs: Array<string | undefined>,
+): string {
+  const normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  let base = explicit ?? normalize(name);
+  if (!base) base = normalize(parameterId);
+  if (!base) base = "filter";
+  const taken = new Set(existingSlugs.filter(Boolean));
+  let slug = base;
+  for (let i = 2; taken.has(slug); i++) slug = `${base}_${i}`;
+  return slug;
+}
+
 function extractTemplateTags(card: MetabaseCard): Record<string, Record<string, unknown>> {
   const nativeStage = card.dataset_query.stages?.find(
     (s) => s["lib/type"] === "mbql.stage/native",
@@ -171,7 +192,7 @@ function formatQueryResult(response: MetabaseDatasetResponse, maxRows: number): 
  */
 export function createServer(credentials: MetabaseClientOptions = {}): McpServer {
   const server = new McpServer(
-    { name: "metabase-mcp", version: "0.1.0" },
+    { name: "metabase-mcp", version: "0.1.1" },
     {
       instructions: `
 You are working with a Metabase instance via its REST API.
@@ -221,7 +242,7 @@ You are working with a Metabase instance via its REST API.
         const payload = JSON.stringify({
           ok: true,
           server: "metabase-mcp",
-          version: "0.1.0",
+          version: "0.1.1",
         });
         return {
           content: [{ type: "text", text: payload }],
@@ -932,7 +953,7 @@ You are working with a Metabase instance via its REST API.
           .record(
             z.string(),
             z.object({
-              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension'"),
+              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension' | 'temporal-unit' (time grouping: requires field_id of a date/time column; use {{tag}} in both SELECT and GROUP BY)"),
               field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
               widget_type: z.string().optional().describe(`Widget type for the dimension filter. Optional — when omitted it is auto-detected from the target field's type; when provided it is validated against the field before saving. Supported per field type: ${WIDGET_TYPE_MATRIX_DOC}. Requires field_id.`),
               display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
@@ -1011,7 +1032,7 @@ You are working with a Metabase instance via its REST API.
           .record(
             z.string(),
             z.object({
-              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension'"),
+              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension' | 'temporal-unit' (time grouping: requires field_id of a date/time column; use {{tag}} in both SELECT and GROUP BY)"),
               field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
               widget_type: z.string().optional().describe(`Widget type for the dimension filter. Optional — when omitted it is auto-detected from the target field's type; when provided it is validated against the field before saving. Supported per field type: ${WIDGET_TYPE_MATRIX_DOC}. Requires field_id.`),
               display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
@@ -1701,8 +1722,18 @@ You are working with a Metabase instance via its REST API.
             "location/state",
             "location/zip_code",
             "location/country",
+            "temporal-unit",
           ])
-          .describe("Filter type"),
+          .describe("Filter type. 'temporal-unit' is the 'Time grouping' widget: connect it to a card's 'temporal-unit' template tag (native SQL) to switch day/week/month/etc."),
+        slug: z
+          .string()
+          .regex(/^[a-z0-9_]+$/)
+          .optional()
+          .describe("URL slug for the filter. Optional — derived from name; falls back to parameter_id when the name has no Latin letters/digits (e.g. Cyrillic)."),
+        default: z
+          .unknown()
+          .optional()
+          .describe("Default value, e.g. \"week\" for a temporal-unit filter or \"2026-01-01~2026-12-31\" for date/range."),
         values_source_type: z
           .enum(["card", "static-list", "fields"])
           .optional()
@@ -1717,14 +1748,25 @@ You are working with a Metabase instance via its REST API.
           ),
       },
     },
-    async ({ dashboard_id, parameter_id, name, type, values_source_type, values_source_config }) => {
+    async ({ dashboard_id, parameter_id, name, type, slug: slugInput, default: defaultValue, values_source_type, values_source_config }) => {
       try {
         const client = new MetabaseClient(credentials);
         // Step 1: fetch current dashboard state (read-modify-write pattern)
         const dashboard = await client.getDashboard(dashboard_id);
         // Step 2: build the new parameter
-        const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+        const slug = resolveParameterSlug(
+          slugInput,
+          name,
+          parameter_id,
+          dashboard.parameters.filter((p) => p.id !== parameter_id).map((p) => p.slug),
+        );
         const newParam: Record<string, unknown> = { id: parameter_id, name, type, slug };
+        if (type === "temporal-unit") {
+          newParam["sectionId"] = "temporal-unit";
+        }
+        if (defaultValue !== undefined) {
+          newParam["default"] = defaultValue;
+        }
         // "fields" means "auto-derive from connected dimension field" — omit the field and
         // Metabase will populate values from the connected field automatically. Sending
         // "fields" as the API value causes a 400 response in Metabase v0.59.
@@ -1772,7 +1814,7 @@ You are working with a Metabase instance via its REST API.
   server.registerTool(
     "dashboards_connect_filter",
     {
-      description: "Wire a dashboard filter parameter to a native SQL card's template tag so the filter affects that card's results. The parameter_id must match one added via dashboards_add_filter; tag_name is the {{tag_name}} variable in the card's SQL. For text/date/number tags (type='text'|'date'|'number'), use target_type='variable' (default). For dimension tags created with tag_config field_id, use target_type='dimension'.",
+      description: "Wire a dashboard filter parameter to a native SQL card's template tag so the filter affects that card's results. The parameter_id must match one added via dashboards_add_filter; tag_name is the {{tag_name}} variable in the card's SQL. For text/date/number tags (type='text'|'date'|'number'), use target_type='variable' (default). For dimension tags created with tag_config field_id, and for 'temporal-unit' (time grouping) tags, use target_type='dimension'.",
       inputSchema: {
         dashboard_id: z.number().int().positive().describe("Dashboard ID"),
         dashcard_id: z
@@ -1838,7 +1880,8 @@ You are working with a Metabase instance via its REST API.
             // FIX-04 drive-by: extractTemplateTags also reads the v0.59+ pMBQL
             // location — the old legacy-only lookup missed dimension tags there.
             const nativeTags = extractTemplateTags(card);
-            if (nativeTags[tag_name]?.["type"] === "dimension") {
+            const tagType = nativeTags[tag_name]?.["type"];
+            if (tagType === "dimension" || tagType === "temporal-unit") {
               resolvedTargetType = "dimension";
             }
           } catch {

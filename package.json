@@ -1,6 +1,6 @@
 {
   "name": "metabase-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server wrapping the Metabase REST API for AI agent access",
   "type": "module",
   "engines": {
