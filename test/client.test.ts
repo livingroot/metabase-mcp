@@ -519,3 +519,38 @@ describe("MetabaseClient", () => {
     });
   });
 });
+
+describe("buildTemplateTags: mb.time_grouping", () => {
+  it("declares a temporal-unit tag from {{mb.time_grouping(...)}}", async () => {
+    const { MetabaseClient } = await import("../src/client.js");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 9 }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new MetabaseClient({ baseUrl: "http://mb", apiKey: "k" });
+    await client.createCard(
+      1,
+      'SELECT {{mb.time_grouping("unit", "orders.created_at")}} AS p, count() FROM orders WHERE {{d}} GROUP BY {{mb.time_grouping("unit", "orders.created_at")}}',
+      "x",
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const tags = body.dataset_query.native?.["template-tags"] ?? body.dataset_query.stages?.[0]?.["template-tags"];
+    expect(tags.unit.type).toBe("temporal-unit");
+    expect(tags.d.type).toBe("text");
+    expect(Object.keys(tags).some((k) => k.startsWith("mb."))).toBe(false);
+  });
+});
+
+describe("tag_configs default/required", () => {
+  it("writes default and required onto the template tag", async () => {
+    const { MetabaseClient } = await import("../src/client.js");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 9 }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new MetabaseClient({ baseUrl: "http://mb", apiKey: "k" });
+    await client.createCard(1, "SELECT {{g}} FROM t GROUP BY {{g}}", "x", undefined, undefined, {
+      g: { type: "temporal-unit", default: "week", required: true },
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const tags = body.dataset_query.native?.["template-tags"] ?? body.dataset_query.stages?.[0]?.["template-tags"];
+    expect(tags.g.default).toBe("week");
+    expect(tags.g.required).toBe(true);
+  });
+});

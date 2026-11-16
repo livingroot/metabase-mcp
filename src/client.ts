@@ -45,6 +45,8 @@ export interface TagConfig {
   field_id?: number;
   widget_type?: string;
   display_name?: string;
+  default?: unknown;
+  required?: boolean;
 }
 
 /**
@@ -67,6 +69,12 @@ function applyTagConfigs(tags: Record<string, unknown>, tagConfigs: Record<strin
     if (config.display_name !== undefined) {
       tag["display-name"] = config.display_name;
     }
+    if (config.default !== undefined) {
+      tag["default"] = config.default;
+    }
+    if (config.required !== undefined) {
+      tag["required"] = config.required;
+    }
   }
 }
 
@@ -82,7 +90,21 @@ function applyTagConfigs(tags: Record<string, unknown>, tagConfigs: Record<strin
 function buildTemplateTags(sql: string, tagTypes?: Record<string, string>): Record<string, unknown> {
   const tags: Record<string, unknown> = {};
   const seen = new Set<string>();
+  // Native time grouping: {{mb.time_grouping("unit", "table.column")}} declares a
+  // "temporal-unit" tag named by the first argument (Metabase 0.55+).
+  for (const [, name] of sql.matchAll(/\{\{\s*mb\.time_grouping\(\s*["']([^"']+)["']/g)) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    tags[name] = {
+      id: name,
+      name,
+      "display-name": name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      type: "temporal-unit",
+      required: false,
+    };
+  }
   for (const [, name] of sql.matchAll(/\{\{\s*([^\s}]+)\s*\}\}/g)) {
+    if (name.startsWith("mb.")) continue;
     if (seen.has(name)) continue;
     seen.add(name);
     if (name.startsWith("#")) {
@@ -418,11 +440,6 @@ export class MetabaseClient {
       // Time grouping tags ("temporal-unit") bind to a date/time column but have
       // no widget-type: the dashboard "Time grouping" widget picks the unit.
       if (config.type === "temporal-unit") {
-        if (config.field_id === undefined) {
-          throw new Error(
-            `tag_configs.${tagName}: type "temporal-unit" requires field_id — time grouping is bound to a date/time column`,
-          );
-        }
         if (config.widget_type !== undefined) {
           throw new Error(`tag_configs.${tagName}: widget_type is not supported for type "temporal-unit"`);
         }

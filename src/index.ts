@@ -192,7 +192,7 @@ function formatQueryResult(response: MetabaseDatasetResponse, maxRows: number): 
  */
 export function createServer(credentials: MetabaseClientOptions = {}): McpServer {
   const server = new McpServer(
-    { name: "metabase-mcp", version: "0.1.1" },
+    { name: "metabase-mcp", version: "0.1.3" },
     {
       instructions: `
 You are working with a Metabase instance via its REST API.
@@ -211,6 +211,21 @@ You are working with a Metabase instance via its REST API.
 - Always link dashboard filter widgets to card parameters after adding them; an unlinked filter has no effect.
 - Use "question" cards (GUI-based) for simple aggregations and "native" cards for complex SQL. Mixing both on one dashboard is fine.
 - After creating or updating a card, always re-fetch its metadata before embedding it in a dashboard to get the correct parameter mappings.
+
+## Time grouping & date filters (native SQL)
+
+- Time grouping ("Group by day/week/month") in SQL: newer Metabase docs describe \`{{mb.time_grouping("unit", "table.column")}}\` (the server parses it into a \`temporal-unit\` tag), but on this instance (v0.59 + ClickHouse) such cards fail with HTTP 400 — UNVERIFIED, do not rely on it. What runs: a \`{{unit}}\` tag with tag_config \`{type: "temporal-unit", field_id: <date column>}\` used in SELECT and GROUP BY; on the card page it shows as a text input, so check grouping on the dashboard.
+- Connect it with a dashboard filter of \`type: "temporal-unit"\` ("Time grouping" widget); \`dashboards_connect_filter\` maps it as \`dimension\` automatically. With no value selected Metabase groups by raw (untruncated) timestamps — set a \`default\` (e.g. "week") on the filter.
+- For a date range prefer ONE Field Filter (\`type: dimension\`, field_id of the date column, widget_type \`date/all-options\`) used as \`WHERE {{date}}\` over two plain \`date\` variables. Field Filters need the table to be synced into Metabase metadata first — a freshly created table has no field_id until Admin → Databases → Sync.
+- Charts over a time grouping: set visualization_settings \`graph.dimensions\` [period, series], \`graph.metrics\`, and \`graph.x_axis.scale: "timeseries"\` so the X axis is temporal, not categorical.
+- Dashboard filter slugs must be unique per dashboard. Names without Latin letters (e.g. Cyrillic) get their slug from parameter_id; pass \`slug\` explicitly if you need a specific URL key.
+- This server cannot delete dashboard filters or tabs, and cannot remove stale parameter_mappings from a dashcard. Plan filters before adding them; leftover ones must be removed in the Metabase UI.
+
+## ClickHouse SQL gotchas
+
+- \`multiIf\`/\`if\` conditions must be UInt8: \`0 + (x = 'a')\` is UInt16 and fails — use \`0 OR (x = 'a')\`.
+- \`multiIf\` branches must share a type: mixing \`toStartOfDay\` (DateTime) and \`toStartOfMonth\` (Date) fails — wrap all in \`toDate(...)\`.
+- Tables on ReplacingMergeTree need \`FINAL\` (or argMax) to hide not-yet-merged duplicates.
 
 ## Query & schema exploration
 
@@ -242,7 +257,7 @@ You are working with a Metabase instance via its REST API.
         const payload = JSON.stringify({
           ok: true,
           server: "metabase-mcp",
-          version: "0.1.1",
+          version: "0.1.3",
         });
         return {
           content: [{ type: "text", text: payload }],
@@ -953,10 +968,12 @@ You are working with a Metabase instance via its REST API.
           .record(
             z.string(),
             z.object({
-              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension' | 'temporal-unit' (time grouping: requires field_id of a date/time column; use {{tag}} in both SELECT and GROUP BY)"),
+              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension' | 'temporal-unit' (time grouping: declared automatically by {{mb.time_grouping(\"tag\", \"table.column\")}} in SQL — use it in both SELECT and GROUP BY; no field_id needed)"),
               field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
               widget_type: z.string().optional().describe(`Widget type for the dimension filter. Optional — when omitted it is auto-detected from the target field's type; when provided it is validated against the field before saving. Supported per field type: ${WIDGET_TYPE_MATRIX_DOC}. Requires field_id.`),
               display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
+              default: z.unknown().optional().describe("Default value for the tag, e.g. \"week\" for a temporal-unit tag, \"2026-01-01\" for a date tag, [\"RUB\"] for a text/dimension tag"),
+              required: z.boolean().optional().describe("Whether the parameter must have a value (requires a default)"),
             }),
           )
           .optional()
@@ -1032,10 +1049,12 @@ You are working with a Metabase instance via its REST API.
           .record(
             z.string(),
             z.object({
-              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension' | 'temporal-unit' (time grouping: requires field_id of a date/time column; use {{tag}} in both SELECT and GROUP BY)"),
+              type: z.string().describe("Tag type: 'text' | 'date' | 'number' | 'dimension' | 'temporal-unit' (time grouping: declared automatically by {{mb.time_grouping(\"tag\", \"table.column\")}} in SQL — use it in both SELECT and GROUP BY; no field_id needed)"),
               field_id: z.number().int().positive().optional().describe("Field ID for dimension tags — sets the dimension and widget-type fields required by Metabase"),
               widget_type: z.string().optional().describe(`Widget type for the dimension filter. Optional — when omitted it is auto-detected from the target field's type; when provided it is validated against the field before saving. Supported per field type: ${WIDGET_TYPE_MATRIX_DOC}. Requires field_id.`),
               display_name: z.string().optional().describe("Override the display name shown in the filter UI"),
+              default: z.unknown().optional().describe("Default value for the tag, e.g. \"week\" for a temporal-unit tag, \"2026-01-01\" for a date tag, [\"RUB\"] for a text/dimension tag"),
+              required: z.boolean().optional().describe("Whether the parameter must have a value (requires a default)"),
             }),
           )
           .optional()
